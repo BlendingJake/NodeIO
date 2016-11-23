@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Material IO",
     "author": "Jacob Morris",
-    "version": (1, 4),
+    "version": (2, 0),
     "blender": (2, 78, 0),
     "location": "Properties > Materials",
     "description": "Allows The Exporting And Importing Of Materials Via .bmat Files",
