@@ -15,11 +15,13 @@ from time import tzname
 import xml.etree.cElementTree as ET
 import ast
 import operator
+from inspect import getmembers
 from os import path, mkdir, listdir, walk, remove as remove_file, sep as os_file_sep
 from shutil import copyfile, rmtree
 from xml.dom.minidom import parse as pretty_parse
 import zipfile
 import string
+from mathutils import *
 
 
 def make_tuple(data):
@@ -41,6 +43,9 @@ def export_node_type(n):
     t = n.type
     is_group = False
     images = []
+    ns = []  # node specific information
+    i = []  # inputs
+    o = []  # outputs
 
     # basic info
     out = {"name": serialize(n.name), "bl_idname": n.bl_idname, "label": serialize(n.label),
@@ -52,12 +57,8 @@ def export_node_type(n):
     else:
         out["parent"] = serialize(n.parent.name)
 
-    ns = []  # node specific information
-    i = []  # inputs
-    o = []  # outputs
-    
     # inputs
-    for j in range(len(n.inputs)):                
+    for j in range(len(n.inputs)):
         if t not in ("GROUP_INPUT", "GROUP_OUTPUT"):
             data = n.inputs[j]
             if data.type in ("RGBA", "RGB", "VECTOR"):
@@ -68,8 +69,8 @@ def export_node_type(n):
                 i.append(data.default_value)
             elif t == "GROUP" and data.type == "SHADER":
                 i.append(j)
-                i.append("SHADER")         
-    
+                i.append("SHADER")
+
     # input nodes
     if t == "TEX_COORD":
         ns = ["from_dupli", n.from_dupli]
@@ -148,9 +149,9 @@ def export_node_type(n):
         ns = ["mapping", curves]
     # Vector nodes
     elif t == "MAPPING":
-        ns = ["vector_type", n.vector_type, "translation", make_tuple(n.translation), "rotation", make_tuple(n.rotation),
-              "scale", make_tuple(n.scale), "use_min", n.use_min, "use_max", n.use_max, "min", make_tuple(n.min),
-              "max", make_tuple(n.max)]
+        ns = ["vector_type", n.vector_type, "translation", make_tuple(n.translation), "rotation",
+              make_tuple(n.rotation), "scale", make_tuple(n.scale), "use_min", n.use_min, "use_max", n.use_max,
+              "min", make_tuple(n.min), "max", make_tuple(n.max)]
     elif t == "BUMP":
         ns = ["invert", n.invert]
     elif t == "NORMAL_MAP":
@@ -167,7 +168,8 @@ def export_node_type(n):
         for j in n.color_ramp.elements:
             cur_el = [j.position, make_tuple(j.color)]            
             els.append(cur_el)       
-        ns = ["color_ramp.color_mode", n.color_ramp.color_mode, "color_ramp.interpolation", n.color_ramp.interpolation, "color_ramp.elements", els]
+        ns = ["color_ramp.color_mode", n.color_ramp.color_mode, "color_ramp.interpolation", n.color_ramp.interpolation,
+              "color_ramp.elements", els]
     elif t == "VECT_MATH":
         ns = ["operation", n.operation]      
     # Script node
@@ -259,8 +261,9 @@ def export_node_type(n):
             ns = ["fastSingleScatter", n.fastSingleScatter, "fssSamples", n.fssSamples, "singleScatterDepth",
                   n.singleScatterDepth, "useAlbSigmaT", n.useAlbSigmaT]
         # Emitter
-        elif node_id in ("MtsNodeEmitter_area", "MtsNodeEmitter_point", "MtsNodeEmitter_spot", "MtsNodeEmitter_directional",
-                    "MtsNodeEmitter_collimated"):
+        elif node_id in ("MtsNodeEmitter_area", "MtsNodeEmitter_point", "MtsNodeEmitter_spot",
+                         "MtsNodeEmitter_directional",
+                         "MtsNodeEmitter_collimated"):
             if node_id == "MtsNodeEmitter_point":
                 ns = ["size", n.size]
             elif node_id == "MtsNodeEmitter_spot":
@@ -284,6 +287,48 @@ def export_node_type(n):
     out["outputs"] = o
 
     return out, is_group, images
+
+
+def export_node_type_inspection(n: bpy.types.Node):
+    ns, inputs, outputs, images = [], [], [], []
+
+    # inputs
+    for j in range(len(n.inputs)):
+        if n.type not in ("GROUP_INPUT", "GROUP_OUTPUT"):
+            data = n.inputs[j]
+            if data.type in ("RGBA", "RGB", "VECTOR"):
+                inputs.append(j)
+                inputs.append(make_tuple(data.default_value))
+            elif data.type == "VALUE":
+                inputs.append(j)
+                inputs.append(data.default_value)
+            elif n.type == "GROUP" and data.type == "SHADER":
+                inputs.append(j)
+                inputs.append("SHADER")
+
+    # list of default values
+    exclude_list = ['__doc__', '__module__', '__slots__', 'bl_description', 'bl_height_default', 'bl_height_max',
+                    'bl_height_min', 'bl_icon', 'bl_rna', 'bl_static_type', 'bl_width_default', 'bl_width_min',
+                    'bl_width_max', 'color_mapping', 'draw_buttons', 'draw_buttons_ext', 'image_user', 'input_template',
+                    'inputs', 'internal_links', 'is_registered_node_type', 'bl_label', 'output_template', 'outputs',
+                    'poll', 'poll_instance', 'rna_type', 'shading_compatibility', 'show_options', 'show_preview',
+                    'show_texture', 'socket_value_update', 'texture_mapping', 'type', 'update', 'viewLocation',
+                    'width_hidden']
+    exclude = {}  # for checking item membership, dict is faster then list
+    for i in exclude_list:
+        exclude[i] = i
+
+    for method in getmembers(n):
+        if method[0] not in exclude:
+            t = method[1]
+            val = eval("n.{}".format(method[0]))  # get value
+
+            if isinstance(t, (Vector, Color, Euler, Quaternion)):
+                ns += [method[0], make_tuple(val)]
+            else:
+                ns += [method[0], val]
+
+    return {"inputs": inputs, "outputs": outputs, "node_specific": ns}
 
 
 # recursive method that collects all nodes and if group node goes and collects its nodes
@@ -347,7 +392,7 @@ def export_material(self, context):
     folder_path = None
     folder_name = None
 
-    # data checks
+    # check file paths
     if not export_path:
         self.report({"ERROR"}, "Empty Export Path")
         return
@@ -509,221 +554,204 @@ def export_material(self, context):
 
 
 def import_material(self, context):
-    temp_epath = context.scene.material_io_import_path
+    import_path = None
+    folder_path = None  # use for getting images if needed
 
-    if temp_epath != "" and path.exists(bpy.path.abspath(temp_epath)) and temp_epath.endswith(".bmat"):
-         #if multiple files then import them all
-        import_list = []
+    if context.scene.material_io_import_type == "1":  # single file
+        import_path = bpy.path.abspath(context.scene.material_io_import_path_file)
+        folder_path = path.dirname(import_path)
+    else:  # all files in folder
+        import_path = bpy.path.abspath(context.scene.material_io_import_path_dir)
+        folder_path = import_path
 
-        if context.scene.material_io_import_type == "2":  # import all files in folder
-            folder_path = path.dirname(bpy.path.abspath(temp_epath))
-            files = listdir(folder_path)            
-            
-            for i in files:
-                if i.endswith(".bmat"):
-                    import_list.append(folder_path + os_file_sep + i)
-        else:
-            if os_file_sep in temp_epath:
-                temp_epath = bpy.path.abspath(temp_epath)       
-            import_list.append(temp_epath)
-            
-        # for each .bmat file import and create material
-        for file_name in import_list:
-            epath = file_name
-            tree = ET.parse(epath)
-            root = tree.getroot()
-            mat = bpy.data.materials.new(root.attrib["Material_Name"])
-            skip = False
-            
-            # check and see render engine data
-            if root.attrib["Render_Engine"] in ("BLENDER_RENDER", "CYCLES"):
-                mat.use_nodes = True
-                nodes = mat.node_tree.nodes
-                m_links = mat.node_tree.links
-                context.scene.render.engine = root.attrib["Render_Engine"]
-            elif root.attrib["Render_Engine"] == "MITSUBA_RENDER" and context.scene.render.engine == "MITSUBA_RENDER":
-                # set up node group
-                node_group = bpy.data.node_groups.new(name=root.attrib["Node_Group_Name"], type="MitsubaShaderNodeTree")
-                nodes = node_group.nodes
-                m_links = node_group.links 
-                mat.mitsuba_nodes.nodetree = node_group.name              
-            else:
-                skip = True                            
-                
-            # import images
-            images = ast.literal_eval(root.attrib["Images"])
-            errors = 0
-            
-            # skip if issue with render engine
-            if not skip:
-                
-                # get rid of current nodes like BSDF Diffuse and Output node
-                for i in nodes:
-                    nodes.remove(i)
-                
-                # don't load image if Render_Engine is MITSUBA_RENDER
-                if root.attrib["Render_Engine"] != "MITSUBA_RENDER":
-                    for i in images:
-                        if i[0] not in bpy.data.images:
-                            if root.attrib["Path_Type"] == "Relative":
-                                root_path = path.dirname(bpy.path.abspath(context.scene.material_io_import_path)) + os_file_sep
-                                try:                
-                                    bpy.data.images.load(root_path + i[0])
-                                except RuntimeError:
-                                    errors += 1
-                            else:
-                                try:
-                                    bpy.data.images.load(i[1])
-                                except RuntimeError:
-                                    errors += 1
-                    if errors != 0:
-                        self.report({"ERROR"}, str(errors) + " Picture(s) Couldn't Be Loaded")
-                    
-                # add new nodes
-                order = ast.literal_eval(root.attrib["Group_Order"])
-                for group_order in order:
-                    group = root.findall(group_order)[0]
-                    counter = 0
+    # check file path
+    if not import_path:
+        self.report({"ERROR"}, "Empty Import Path")
+        return
+    elif not path.exists(import_path):
+        self.report({"ERROR"}, "Filepath '{}' Does Not Exist".format(import_path))
+        return
+    elif context.scene.material_io_import_type == "1" and not import_path.endswith(".bmat"):
+        self.report({"ERROR"}, "Filepath Does Not End With .bmat")
+        return
 
-                    # set up which node tree to use
-                    if group.tag == "main":
-                        nt = nodes
-                    else:            
-                        nt = bpy.data.node_groups.new(group.tag, "ShaderNodeTree")
+    # collect filepaths
+    import_list = []
 
-                    for data in group:
-                        if counter == 0:  # nodes
-                            parents = []
-                            for node in data:
-                                node_created = True                            
-                                # check if node is custom and if it is make sure addon is installed
-                                if node.attrib["bl_idname"] == "GenericNoteNode" and \
-                                        ("generic_note" not in bpy.context.user_preferences.addons.keys() and
-                                                 "genericnote" not in bpy.context.user_preferences.addons.keys()):
+    if context.scene.material_io_import_type == "2":  # import all files in folder
+        files = listdir(import_path)
 
-                                    node_created = False
-                                    self.report({"WARNING"}, "Generic Note Node Addon Not Installed")
-                                    
-                                if node_created:
-                                    # parse name
-                                    # create node in group or just create it
-                                    if group.tag != "main":    
-                                        temp = nt.nodes.new(node.attrib["bl_idname"])
-                                    else:
-                                        temp = nt.new(node.attrib["bl_idname"])
-                                        
-                                    # adjust basic node attributes
-                                    temp.location = s_to_t(node.attrib["location"])
-                                    temp.name = node.attrib["name"]
-                                    temp.label = node.attrib["label"]
-                                    temp.mute = ast.literal_eval(node.attrib["mute"])
-                                    temp.height = float(node.attrib["height"])
-                                    temp.width = float(node.attrib["width"])
-                                    
-                                    # see if custom color is in file, should be if newer version
-                                    try:
-                                        if node.attrib["use_custom_color"] == "True":
-                                            temp.use_custom_color = True                                                                  
-                                        temp.color = s_to_t(node.attrib["color"])
-                                    except:
-                                        print("This File Is Older And Doesn't Contain Custom Color")
-                                                                        
-                                    # parent
-                                    if node.attrib["parent"] != "None":
-                                        parents.append([node.attrib["name"], node.attrib["parent"],
-                                                        s_to_t(node.attrib["location"])])
-                                    
-                                    # hide if needed
-                                    if node.attrib["hide"] == "True":
-                                        temp.hide = True
-                                    
-                                    # node specific is first so that groups are set up first
-                                    nos = node.attrib["node_specific"]
-                                    if nos != "":
-                                        nod = ast.literal_eval(nos)
-                                        for i in range(0, len(nod), 2):  # step by two because name, value...
-                                            att = nod[i]
-                                            val = nod[i + 1]
-                                           
-                                            # check and see if this is filename, if so change value
-                                            if att == "filename":
-                                                image_path_list = val.split(os_file_sep)
-                                                mat_path_list = file_name.split(os_file_sep)
-                                                del mat_path_list[len(mat_path_list) - 1]
-                                                
-                                                image_path_string = ""
-                                                for i2 in mat_path_list:
-                                                    if i2 != "":
-                                                        image_path_string += i2 + os_file_sep
-                                                        
-                                                image_path_string += image_path_list[len(image_path_list) - 1]
-                                                val = image_path_string
-
-                                            if att in ("group_input", "group_output"):
-                                                for sub in range(0, len(val), 2):
-                                                    sub_val = [val[sub], val[sub + 1]]
-                                                    if att == "group_input":
-                                                        nt.inputs.new(sub_val[0], sub_val[1])
-                                                    else:
-                                                        nt.outputs.new(sub_val[0], sub_val[1])
-                                            else:
-                                                set_attributes(temp, val, att)
-
-                                    # inputs
-                                    ins = node.attrib["inputs"]              
-                                    if ins != "":
-                                        inp = ast.literal_eval(ins)
-                                        for i in range(0, len(inp), 2):
-                                            if inp[i + 1] != "SHADER":
-                                                temp.inputs[inp[i]].default_value = inp[i + 1]
-                                    # outputs
-                                    ous = node.attrib["outputs"]
-                                    if ous != "":
-                                        out = ast.literal_eval(ous)
-                                        for i in range(0, len(out), 2):
-                                            temp.outputs[out[i]].default_value = out[i + 1]                    
-                            # set parents
-                            for parent in parents:
-                                if group.tag != "main":
-                                    nt.nodes[parent[0]].parent = nt.nodes[parent[1]]
-                                    nt.nodes[parent[0]].location = parent[2]
-                                else:
-                                    nt[parent[0]].parent = nt[parent[1]]                                
-                                    nt[parent[0]].location = parent[2]
-                        
-                        # create links
-                        elif counter == 1:
-                            for link in data:
-                                ld = ast.literal_eval(link.attrib["link_info"])                    
-                                if group.tag == "main":
-                                    o = nt[ld[0]].outputs[ld[1]]
-                                    i = nt[ld[2]].inputs[ld[3]]
-                                    m_links.new(o, i)                        
-                                else:
-                                    o = nt.nodes[ld[0]].outputs[ld[1]]
-                                    i = nt.nodes[ld[2]].inputs[ld[3]]
-                                    nt.links.new(o, i)
-                                        
-                        counter += 1
-                                    
-                if root.attrib["Render_Engine"] != "MITSUBA_RENDER":                                                    
-                    # get rid of extra groups
-                    for i in bpy.data.node_groups:
-                        if i.users == 0:
-                            bpy.data.node_groups.remove(i)
-                        
-                # add material to object
-                if context.object is not None and context.scene.material_io_is_auto_add:
-                    context.object.data.materials.append(mat)
-            
-            # if there is a skip because of render engine
-            else:
-                self.report({"ERROR"}, "Please Switch To The {} Render Engine".format(root.attrib["Render_Engine"]))
+        for file in files:
+            if file.endswith(".bmat"):
+                import_list.append(import_path + os_file_sep + file)
     else:
-        if temp_epath == "" or not path.exists(bpy.path.abspath(temp_epath)):
-            self.report({"ERROR"}, "File Could Not Be Imported")
-        else:
-            self.report({"ERROR"}, "This File Is Not A .bmat File")                         
+        import_list.append(import_path)
+
+    # for each .bmat file import and create material
+    for file_path in import_list:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        mat = bpy.data.materials.new(root.attrib["Material_Name"])
+        nodes = None
+        links = None
+
+        # make sure in correct render mode
+        if root.attrib["Render_Engine"] != context.scene.render.engine:
+            self.report({"ERROR"}, "Cannot Continue: Please Switch To '{}' Engine".format(root.attrib["Render_Engine"]))
+            return
+
+        # check and see render engine data
+        if root.attrib["Render_Engine"] in ("BLENDER_RENDER", "CYCLES"):
+            mat.use_nodes = True
+            nodes = mat.node_tree.nodes
+            links = mat.node_tree.links
+            context.scene.render.engine = root.attrib["Render_Engine"]
+        elif root.attrib["Render_Engine"] == "MITSUBA_RENDER" and context.scene.render.engine == "MITSUBA_RENDER":
+            node_group = bpy.data.node_groups.new(name=root.attrib["Node_Group_Name"], type="MitsubaShaderNodeTree")
+            nodes = node_group.nodes
+            links = node_group.links
+            mat.mitsuba_nodes.nodetree = node_group.name
+
+        # remove any default nodes
+        for i in nodes:
+            nodes.remove(i)
+
+        # import images
+        images = ast.literal_eval(root.attrib["Images"])
+        image_errors = 0
+
+        # don't load image if Render_Engine is MITSUBA_RENDER because it uses absolute file paths
+        if root.attrib["Render_Engine"] != "MITSUBA_RENDER":
+            for image in images:
+                if image[0] not in bpy.data.images:
+                    try:
+                        if root.attrib["Path_Type"] == "Relative":
+                            bpy.data.images.load(folder_path + os_file_sep + image[0])
+                        else:
+                            bpy.data.images.load(image[1])
+                    except RuntimeError:
+                        image_errors += 1
+
+            if image_errors:
+                self.report({"ERROR"}, str(image_errors) + " Picture(s) Couldn't Be Loaded")
+
+        # add new nodes
+        order = ast.literal_eval(root.attrib["Group_Order"])
+        for group_order in order:
+            group = root.findall(group_order)[0]
+
+            # set up which node tree to use
+            if group.tag == "main":
+                nt = nodes
+            else:
+                nt = bpy.data.node_groups.new(group.tag, "ShaderNodeTree")
+
+            is_nodes = True  # nodes or links
+            for data in group:
+                if is_nodes:  # nodes
+                    parents = []
+
+                    for node in data:
+                        # check if node is custom then make sure it is installed
+                        if node.attrib["bl_idname"] == "GenericNoteNode" and \
+                                ("generic_note" not in bpy.context.user_preferences.addons.keys() and
+                                 "genericnote" not in bpy.context.user_preferences.addons.keys()):
+
+                            self.report({"WARNING"}, "Generic Note Node Add-on Not Installed")
+                        else:
+                            # retrieve node name, create node
+                            if group.tag != "main":
+                                temp = nt.nodes.new(node.attrib["bl_idname"])
+                            else:
+                                temp = nt.new(node.attrib["bl_idname"])
+
+                            # adjust basic node attributes
+                            temp.location = s_to_t(node.attrib["location"])
+                            temp.name = node.attrib["name"]
+                            temp.label = node.attrib["label"]
+                            temp.mute = ast.literal_eval(node.attrib["mute"])
+                            temp.height = float(node.attrib["height"])
+                            temp.width = float(node.attrib["width"])
+
+                            # see if custom color is in file, should be if newer version
+                            if "use_custom_color" in node.attrib and "color" in node.attrib:
+                                if node.attrib["use_custom_color"] == "True":
+                                    temp.use_custom_color = True
+                                temp.color = s_to_t(node.attrib["color"])
+
+                            # check for parent, like layout frame
+                            if node.attrib["parent"] != "None":
+                                parents.append([node.attrib["name"], node.attrib["parent"],
+                                                s_to_t(node.attrib["location"])])
+
+                            # hide if needed
+                            temp.hide = True if node.attrib["hide"] == "True" else False
+
+                            # node specific is first so that groups are set up first
+                            nos = node.attrib["node_specific"]
+                            if nos:
+                                nod = ast.literal_eval(nos)
+                                for i in range(0, len(nod), 2):  # step by two because name, value, name, value...
+                                    att = nod[i]
+                                    val = nod[i + 1]
+
+                                    # group node inputs and outputs
+                                    if att in ("group_input", "group_output"):
+                                        for sub in range(0, len(val), 2):
+                                            sub_val = [val[sub], val[sub + 1]]
+                                            if att == "group_input":
+                                                nt.inputs.new(sub_val[0], sub_val[1])
+                                            else:
+                                                nt.outputs.new(sub_val[0], sub_val[1])
+                                    else:
+                                        set_attributes(temp, val, att)
+
+                            # inputs
+                            ins = node.attrib["inputs"]
+                            if ins != "":
+                                inp = ast.literal_eval(ins)
+                                for i in range(0, len(inp), 2):
+                                    if inp[i + 1] != "SHADER":
+                                        temp.inputs[inp[i]].default_value = inp[i + 1]
+                            # outputs
+                            ous = node.attrib["outputs"]
+                            if ous != "":
+                                out = ast.literal_eval(ous)
+                                for i in range(0, len(out), 2):
+                                    temp.outputs[out[i]].default_value = out[i + 1]
+                    # set parents
+                    for parent in parents:
+                        if group.tag != "main":
+                            nt.nodes[parent[0]].parent = nt.nodes[parent[1]]
+                            nt.nodes[parent[0]].location = parent[2]
+                        else:
+                            nt[parent[0]].parent = nt[parent[1]]
+                            nt[parent[0]].location = parent[2]
+
+                # create links
+                else:
+                    for link in data:
+                        ld = ast.literal_eval(link.attrib["link_info"])
+                        if group.tag == "main":
+                            o = nt[ld[0]].outputs[ld[1]]
+                            i = nt[ld[2]].inputs[ld[3]]
+                            links.new(o, i)
+                        else:
+                            o = nt.nodes[ld[0]].outputs[ld[1]]
+                            i = nt.nodes[ld[2]].inputs[ld[3]]
+                            nt.links.new(o, i)
+
+                is_nodes = not is_nodes
+
+        if root.attrib["Render_Engine"] != "MITSUBA_RENDER":
+            # get rid of extra groups
+            for i in bpy.data.node_groups:
+                if i.users == 0:
+                    bpy.data.node_groups.remove(i)
+
+        # add material to object
+        if context.object is not None and context.scene.material_io_is_auto_add:
+            context.object.data.materials.append(mat)
 
 
 def s_to_t(s):
@@ -736,11 +764,8 @@ def s_to_t(s):
 
 def set_attributes(temp, val, att):
     # determine attribute type, exec() can be used if value gets directly set to attribute
-    if att == "image":
-        try:
-            temp.image = bpy.data.images[val]
-        except KeyError:
-            pass
+    if att == "image" and val in bpy.data.images:
+        temp.image = bpy.data.images[val]
     elif att == "object" and val in bpy.data.objects:
         temp.object = bpy.data.objects[val]
     elif att == "particle_system" and val[0] in bpy.data.objects \
@@ -779,8 +804,7 @@ def set_attributes(temp, val, att):
 
         # go through each curve
         counter = 0
-        for i in val:            
-            # i == [[location, handle_type], [location, handle_type]] so forth for however many points on curve
+        for i in val:
             # set first two points
             curves = temp.mapping.curves
             curves[counter].extend = i[0]
@@ -794,7 +818,7 @@ def set_attributes(temp, val, att):
                 temp_point = temp.mapping.curves[counter].points.new(i2[0][0], i2[0][1])
                 temp_point.handle_type = i2[1]
             counter += 1
-    elif val != "":
+    elif val:
         if isinstance(val, str):
             exec("temp.{} = '{}'".format(att, val))
         else:
@@ -804,13 +828,15 @@ def set_attributes(temp, val, att):
 bpy.types.Scene.material_io_import_export = EnumProperty(name="Import/Export", items=(("1", "Import", ""),
                                                                                       ("2", "Export", "")))
 bpy.types.Scene.material_io_export_path = StringProperty(name="Export Path", subtype="DIR_PATH")
-bpy.types.Scene.material_io_import_path = StringProperty(name="Import Path", subtype="FILE_PATH")
+bpy.types.Scene.material_io_import_path_file = StringProperty(name="Import Path", subtype="FILE_PATH")
+bpy.types.Scene.material_io_import_path_dir = StringProperty(name="Import Path", subtype="DIR_PATH")
 bpy.types.Scene.material_io_image_save_type = EnumProperty(name="Image Path", items=(("1", "Absolute Paths", ""),
-                                                                         ("2", "Make Paths Relative", "")), default="1")
+                                                                                     ("2", "Make Paths Relative", "")),
+                                                           default="1")
 bpy.types.Scene.material_io_is_auto_add = BoolProperty(name="Add Material To Object?", default=True)
 bpy.types.Scene.material_io_export_type = EnumProperty(name="Export Type", items=(("1", "Selected", ""),
-                                                                                ("2", "Current Object", ""),
-                                                                                ("3", "All Materials", "")))
+                                                                                  ("2", "Current Object", ""),
+                                                                                  ("3", "All Materials", "")))
 bpy.types.Scene.material_io_import_type = EnumProperty(name="Import Type", items=(("1", "Single", ""),
                                                                                   ("2", "Multiple", "")))
 bpy.types.Scene.material_io_is_compress = BoolProperty(name="Compress Folder?")
@@ -830,18 +856,25 @@ class MaterialIOPanel(bpy.types.Panel):
         layout.separator()
         
         if context.scene.material_io_import_export == "2":
-            layout.prop(context.scene, "material_io_export_path")
-            layout.prop(context.scene, "material_io_image_save_type")
             layout.prop(context.scene, "material_io_export_type")
+            layout.prop(context.scene, "material_io_image_save_type")
             layout.prop(context.scene, "material_io_is_compress", icon="FILTER")
+            layout.separator()
+            layout.prop(context.scene, "material_io_export_path")
             layout.separator()
             layout.operator("export.material_io_export", icon="ZOOMOUT")
                   
         else:
-            layout.prop(context.scene, "material_io_import_path")        
             layout.prop(context.scene, "material_io_import_type")
             layout.prop(context.scene, "material_io_is_auto_add", icon="MATERIAL")
-            layout.separator()       
+            layout.separator()
+
+            if context.scene.material_io_import_type == "1":
+                layout.prop(context.scene, "material_io_import_path_file")
+            else:
+                layout.prop(context.scene, "material_io_import_path_dir")
+            layout.separator()
+
             layout.operator("import.material_io_import", icon="ZOOMIN")
 
 
