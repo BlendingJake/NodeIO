@@ -15,7 +15,7 @@ from time import tzname
 import xml.etree.cElementTree as ET
 import ast
 import operator
-from os import path, makedirs, listdir, walk, remove as remove_file, sep as os_file_sep
+from os import path, mkdir, listdir, walk, remove as remove_file, sep as os_file_sep
 from shutil import copyfile, rmtree
 from xml.dom.minidom import parse as pretty_parse
 import zipfile
@@ -342,19 +342,41 @@ def link_info(link):
 
 def export_material(self, context):
     mat_list = []
-    et = context.scene.export_materials_type
-    folder_path = ""
-    folder_name = ""
+    export_type = context.scene.material_io_export_type
+    export_path = bpy.path.abspath(context.scene.material_io_export_path)
+    folder_path = None
+    folder_name = None
 
-    # determine what all is being exported
-    if et == "1" and context.material is not None:
+    # data checks
+    if not export_path:
+        self.report({"ERROR"}, "Empty Export Path")
+        return
+    elif not path.exists(export_path):
+        self.report({"ERROR"}, "Export Path '{}' Does Not Exist".format(export_path))
+        return
+
+    # determine what all is being exported and the name of the folder to export to
+    if export_type == "1" and context.material is not None:
         mat_list.append(context.material.name)
-    elif et == "2":
+    elif export_type == "2":
+        folder_name = context.object.name
         for i in context.object.data.materials:
             mat_list.append(i.name)
-    elif et == "3":
+    elif export_type == "3":
+        folder_name = path.split(bpy.data.filepath)[1]
         for i in bpy.data.materials:
             mat_list.append(i.name)
+
+    # create folder if more then 1 material, or if paths are being made relative
+    if len(mat_list) > 1 or context.scene.material_io_image_save_type == "2":
+        try:
+            folder_path = export_path + os_file_sep + folder_name
+            mkdir(folder_path)
+        except FileExistsError:
+            self.report({"ERROR"}, "Directory '{}' Already Exists, Cannot Continue".format(folder_path))
+            return
+    else:
+        folder_path = export_path
 
     # export materials
     for mat_name in mat_list:
@@ -367,162 +389,116 @@ def export_material(self, context):
                 mat = bpy.data.node_groups[bpy.data.materials[mat_name].mitsuba_nodes.nodetree]
             else:
                 mat = None
-            
-        epath = context.scene.save_path_export
         
         if mat is not None:
-            if epath != "":
-                # try open file
-                error = True
+            root = ET.Element("material")
+            names = {}
+            data, images = [], []
+            m_links, m_nodes = [], []
 
-                if "//" in epath:
-                    epath = bpy.path.abspath(epath)
-                if path.exists(epath):
-                    error = False
+            node_group_name = ""
 
-                if not error:
-                    root = ET.Element("material")
-                    names = {}
-                    data = []
-                    images = []
-                    
-                    node_group_name = ""
-                    
-                    # main node and links sources depending on what render engine
-                    if context.scene.render.engine in ("CYCLES", "BLENDER_RENDER"):
-                        m_links = mat.node_tree.links
-                        m_nodes = mat.node_tree.nodes
-                    # mitsuba nodes are in a node group that is linked up to the material
-                    elif context.scene.render.engine == "MITSUBA_RENDER":
-                        m_links = mat.links
-                        m_nodes = mat.nodes
-                        node_group_name = bpy.data.materials[mat_name].mitsuba_nodes.nodetree  
-                        
-                    # get node data
-                    collect_nodes(m_nodes, m_links, images, names, "main", data)                                                                                       
-                                                                                                                                                           
-                    # write data
-                    # material attribs
-                    t = datetime.now()
-                    date_string = "{}/{}/{} at {}:{}:{} in {}".format(t.month, t.day, t.year, t.hour, t.minute,
-                                                                      t.second, tzname[0])
+            # main node and links sources depending on what render engine
+            if context.scene.render.engine in ("CYCLES", "BLENDER_RENDER"):
+                m_links = mat.node_tree.links
+                m_nodes = mat.node_tree.nodes
+            # mitsuba nodes are in a node group that is linked up to the material
+            elif context.scene.render.engine == "MITSUBA_RENDER":
+                m_links = mat.links
+                m_nodes = mat.nodes
+                node_group_name = bpy.data.materials[mat_name].mitsuba_nodes.nodetree
 
-                    root.attrib = {"Render_Engine": context.scene.render.engine, "Material_Name": serialize(mat.name),
-                                   "Node_Group_Name": serialize(node_group_name), "Date_Created": date_string,
-                                   "Number_Of_Nodes": ""}
+            # get node data
+            collect_nodes(m_nodes, m_links, images, names, "main", data)
 
-                    n = 0
-                    num_nodes = 0
-                    for group in names:
-                        sub_e = ET.SubElement(root, group.replace("/", "_"))
-                        d = data[names[group]]
-                        sub_e_nodes = ET.SubElement(sub_e, group.replace("/", "_") + "_nodes")
-                        for i in d[0]:  # nodes
-                            ET.SubElement(sub_e_nodes, "node" + str(n), {"name": i["name"], "bl_idname": i["bl_idname"],
-                                                                         "label": i["label"], "color": i["color"],
-                                                                         "parent": str(i["parent"]),
-                                                                         "location": i["location"],
-                                                                         "height": i["height"], "width": i["width"],
-                                                                         "mute": i["mute"], "hide": i["hide"],
-                                                                         "inputs": i["inputs"], "outputs": i["outputs"],
-                                                                         "node_specific": i["node_specific"],
-                                                                         "use_custom_color": i["use_custom_color"]})
-                            num_nodes += 1
+            # write data
+            # material attribs
+            t = datetime.now()
+            date_string = "{}/{}/{} at {}:{}:{} in {}".format(t.month, t.day, t.year, t.hour, t.minute,
+                                                              t.second, tzname[0])
 
-                        sub_e_links = ET.SubElement(sub_e, group.replace("/", "_") + "_links")
-                        for i in d[1]:  # links
-                            ET.SubElement(sub_e_links, "link" + str(n), {"link_info": i})
-                            n += 1
+            root.attrib = {"Render_Engine": context.scene.render.engine, "Material_Name": serialize(mat.name),
+                           "Node_Group_Name": serialize(node_group_name), "Date_Created": date_string,
+                           "Number_Of_Nodes": ""}
 
-                    root.attrib["Number_Of_Nodes"] = str(num_nodes)
-                    # get order of groups
-                    pre_order = sorted(names.items(), key=operator.itemgetter(1))
-                    order = [i[0].replace("/", "_") for i in pre_order]
-                    root.attrib["Group_Order"] = str(order)
+            link_counter = 0
+            node_counter = 0
+            for group in names:
+                sub_e = ET.SubElement(root, group.replace("/", "_"))
+                d = data[names[group]]
+                sub_e_nodes = ET.SubElement(sub_e, group.replace("/", "_") + "_nodes")
+                for i in d[0]:  # nodes
+                    ET.SubElement(sub_e_nodes, "node" + str(node_counter), {"name": i["name"],
+                                                                            "bl_idname": i["bl_idname"],
+                                                                            "label": i["label"],
+                                                                            "color": i["color"],
+                                                                            "parent": str(i["parent"]),
+                                                                            "location": i["location"],
+                                                                            "height": i["height"],
+                                                                            "width": i["width"],
+                                                                            "mute": i["mute"],
+                                                                            "hide": i["hide"],
+                                                                            "inputs": i["inputs"],
+                                                                            "outputs": i["outputs"],
+                                                                            "node_specific": i["node_specific"],
+                                                                            "use_custom_color": i["use_custom_color"]})
+                    node_counter += 1
 
-                    # images
-                    img_out = []
-                    save_path = epath + serialize(mat.name) + ".bmat"
-                    # create folder if needed
-                    if (et == "2" and len(context.object.data.materials) >= 2) or \
-                            (et == "3" and len(bpy.data.materials) >= 2):
+                sub_e_links = ET.SubElement(sub_e, group.replace("/", "_") + "_links")
+                for i in d[1]:  # links
+                    ET.SubElement(sub_e_links, "link" + str(link_counter), {"link_info": i})
+                    link_counter += 1
 
-                        if not path.exists(epath + serialize(mat.name)) and folder_path == "":
-                            try:
-                                makedirs(epath + serialize(mat.name))
-                                folder_path = epath + serialize(mat.name)
-                                folder_name = serialize(mat.name)
-                            except PermissionError:
-                                raise PermissionError("Cannot Write At '{}'".format(epath+serialize(mat.name)))
-                        elif folder_path == "":
-                            folder_path = epath + serialize(mat.name)
+            root.attrib["Number_Of_Nodes"] = str(node_counter)
+            # get order of groups
+            pre_order = sorted(names.items(), key=operator.itemgetter(1))
+            order = [i[0].replace("/", "_") for i in pre_order]
+            root.attrib["Group_Order"] = str(order)
 
-                    # set save path based on folder path
-                    if folder_path != "":
-                        save_path = path.join(folder_path, serialize(mat.name) + ".bmat")
-                    # image file paths
-                    if context.scene.image_save_type == "1":  # absolute filepaths
-                        root.attrib["Path_Type"] = "Absolute"                                       
-                        for i in images:
-                            for i2 in i:
-                                img_out.append([i2[0], bpy.path.abspath(i2[1])])
-                    else:  # relative filepaths
-                        error = False
-                        for i in images:
-                            if not i:
-                                error = True
-                        if error:
-                            save_path = path.join(epath + serialize(mat.name), serialize(mat.name) + ".bmat")
-                            image_path = epath + serialize(mat.name)
-                            if not path.exists(epath + serialize(mat.name)) and folder_path == "":
-                                try:
-                                    makedirs(epath + serialize(mat.name))
-                                    folder_path = epath + serialize(mat.name)
-                                    folder_name = serialize(mat.name)
-                                except PermissionError:
-                                    error = False
-                            elif folder_path != "":
-                                save_path = path.join(folder_path, serialize(mat.name) + ".bmat")
-                                image_path = folder_path
-                            # make sure folder_path is correct
-                            if path.exists(epath + serialize(mat.name)) and folder_path == "":
-                                folder_path = epath + serialize(mat.name)
-                        root.attrib["Path_Type"] = "Relative"
-                        if error:
-                            for i in images:
-                                for i2 in i:
-                                    i3 = bpy.path.abspath(i2[1])
-                                    i2_l = i3.split(os_file_sep)
-                                    img_out.append([i2[0], os_file_sep + i2_l[len(i2_l) - 1]])
-                                    if path.exists(image_path):
-                                        copyfile(i3, image_path + os_file_sep + i2_l[len(i2_l) - 1])
-                
-                    root.attrib["Images"] = str(img_out)                                                
-                    tree = ET.ElementTree(root)
-                    error2 = True
-                    try:
-                        tree.write(save_path)
-                        error2 = False                    
-                    except (PermissionError, FileNotFoundError):
-                        self.report({"ERROR"}, "Permission Denied '{}'".format(save_path))
+            # images
+            img_out = []  # collect all images to place as attribute of root element so they can be imported first
 
-                    # if no error make text pretty
-                    if not error2:
-                        pretty_file = pretty_parse(save_path)
-                        pretty_text = pretty_file.toprettyxml()
-                        file = open(save_path, "w+")
-                        file.write(pretty_text)
-                        file.close()
-                # if error
-                elif error:
-                    self.report({"ERROR"}, "Export Path Is Invalid") 
+            # absolute filepaths
+            if context.scene.material_io_image_save_type == "1":
+                root.attrib["Path_Type"] = "Absolute"
+
+                # of format [node, node,...] where each node is [image, image,...] and image is [name, path]
+                for node in images:
+                    for image in node:
+                        img_out.append([image[0], bpy.path.abspath(image[1])])
+            else:  # relative filepaths
+                root.attrib["Path_Type"] = "Relative"
+
+                for node in images:
+                    for image in node:
+                        image_path = bpy.path.abspath(image[1])
+                        image_name = path.split(image_path)[1]
+                        img_out.append([image[0], os_file_sep + image_name])
+                        copyfile(image_path, folder_path + os_file_sep + image_name)
+
+            root.attrib["Images"] = str(img_out)
+            tree = ET.ElementTree(root)
+            print(tree)
+            save_path = folder_path + os_file_sep + mat_name + ".bmat"
+
+            try:
+                tree.write(save_path)
+            except (PermissionError, FileNotFoundError):
+                self.report({"ERROR"}, "Permission Denied '{}'".format(save_path))
+                return
+
+            pretty_file = pretty_parse(save_path)
+            pretty_text = pretty_file.toprettyxml()
+            file = open(save_path, "w+")
+            file.write(pretty_text)
+            file.close()
 
     # zip folder
-    if folder_path != "" and context.scene.compress_folder:
-        if path.exists(path.join(epath, folder_name + ".zip")):  # if file is already there, delete
-            remove_file(path.join(epath, folder_name + ".zip"))
+    if folder_path != export_path and context.scene.material_io_is_compress:  # if folder has been created
+        if path.exists(folder_path + ".zip"):  # if zipped file is already there, delete
+            remove_file(folder_path + ".zip")
 
-        zf = zipfile.ZipFile(path.join(epath, folder_name + ".zip"), "w", zipfile.ZIP_DEFLATED)
+        zf = zipfile.ZipFile(folder_path + ".zip", "w", zipfile.ZIP_DEFLATED)
         for dirname, subdirs, files in walk(folder_path):
             for filename in files:
                 zf.write(path.join(dirname, filename), arcname=filename)
@@ -533,13 +509,13 @@ def export_material(self, context):
 
 
 def import_material(self, context):
-    temp_epath = context.scene.save_path_import
+    temp_epath = context.scene.material_io_import_path
 
     if temp_epath != "" and path.exists(bpy.path.abspath(temp_epath)) and temp_epath.endswith(".bmat"):
          #if multiple files then import them all
         import_list = []
 
-        if context.scene.import_materials_type == "2":  # import all files in folder
+        if context.scene.material_io_import_type == "2":  # import all files in folder
             folder_path = path.dirname(bpy.path.abspath(temp_epath))
             files = listdir(folder_path)            
             
@@ -590,7 +566,7 @@ def import_material(self, context):
                     for i in images:
                         if i[0] not in bpy.data.images:
                             if root.attrib["Path_Type"] == "Relative":
-                                root_path = path.dirname(bpy.path.abspath(context.scene.save_path_import)) + os_file_sep
+                                root_path = path.dirname(bpy.path.abspath(context.scene.material_io_import_path)) + os_file_sep
                                 try:                
                                     bpy.data.images.load(root_path + i[0])
                                 except RuntimeError:
@@ -682,15 +658,17 @@ def import_material(self, context):
                                                         
                                                 image_path_string += image_path_list[len(image_path_list) - 1]
                                                 val = image_path_string
-                                                
-                                            set_attributes(temp, val, att)
+
                                             if att in ("group_input", "group_output"):
                                                 for sub in range(0, len(val), 2):
                                                     sub_val = [val[sub], val[sub + 1]]
                                                     if att == "group_input":
                                                         nt.inputs.new(sub_val[0], sub_val[1])
                                                     else:
-                                                        nt.outputs.new(sub_val[0], sub_val[1])                                
+                                                        nt.outputs.new(sub_val[0], sub_val[1])
+                                            else:
+                                                set_attributes(temp, val, att)
+
                                     # inputs
                                     ins = node.attrib["inputs"]              
                                     if ins != "":
@@ -735,7 +713,7 @@ def import_material(self, context):
                             bpy.data.node_groups.remove(i)
                         
                 # add material to object
-                if context.object is not None and context.scene.add_material_auto:
+                if context.object is not None and context.scene.material_io_is_auto_add:
                     context.object.data.materials.append(mat)
             
             # if there is a skip because of render engine
@@ -794,7 +772,7 @@ def set_attributes(temp, val, att):
         temp.mapping.clip_max_y = float(val[3])
         temp.mapping.clip_min_x = float(val[4])
         temp.mapping.clip_min_y = float(val[5])
-        temp.mapping_use_clip = True if val[6] == "True" else False
+        temp.mapping.use_clip = True if val[6] == "True" else False
 
         for i in range(7):
             del val[0]
@@ -823,18 +801,19 @@ def set_attributes(temp, val, att):
             exec("temp.{} = {}".format(att, val))
 
 # PROPERTIES
-bpy.types.Scene.import_export_mat = EnumProperty(name="Import/Export", items=(("1", "Import", ""), ("2", "Export", "")))
-bpy.types.Scene.save_path_export = StringProperty(name="Export Path", subtype="DIR_PATH")
-bpy.types.Scene.save_path_import = StringProperty(name="Import Path", subtype="FILE_PATH")
-bpy.types.Scene.image_save_type = EnumProperty(name="Image Path", items=(("1", "Absolute Paths", ""),
-                                                                         ("2", "Make Paths Relative", "")))
-bpy.types.Scene.add_material_auto = BoolProperty(name="Add Material To Object?", default=True)
-bpy.types.Scene.export_materials_type = EnumProperty(name="Export Type", items=(("1", "Selected", ""),
+bpy.types.Scene.material_io_import_export = EnumProperty(name="Import/Export", items=(("1", "Import", ""),
+                                                                                      ("2", "Export", "")))
+bpy.types.Scene.material_io_export_path = StringProperty(name="Export Path", subtype="DIR_PATH")
+bpy.types.Scene.material_io_import_path = StringProperty(name="Import Path", subtype="FILE_PATH")
+bpy.types.Scene.material_io_image_save_type = EnumProperty(name="Image Path", items=(("1", "Absolute Paths", ""),
+                                                                         ("2", "Make Paths Relative", "")), default="1")
+bpy.types.Scene.material_io_is_auto_add = BoolProperty(name="Add Material To Object?", default=True)
+bpy.types.Scene.material_io_export_type = EnumProperty(name="Export Type", items=(("1", "Selected", ""),
                                                                                 ("2", "Current Object", ""),
                                                                                 ("3", "All Materials", "")))
-bpy.types.Scene.import_materials_type = EnumProperty(name="Import Type", items=(("1", "Single", ""),
-                                                                                ("2", "Multiple", "")))
-bpy.types.Scene.compress_folder = BoolProperty(name="Compress Folder?")
+bpy.types.Scene.material_io_import_type = EnumProperty(name="Import Type", items=(("1", "Single", ""),
+                                                                                  ("2", "Multiple", "")))
+bpy.types.Scene.material_io_is_compress = BoolProperty(name="Compress Folder?")
 
 
 class MaterialIOPanel(bpy.types.Panel):
@@ -847,21 +826,21 @@ class MaterialIOPanel(bpy.types.Panel):
     
     def draw(self, context):
         layout = self.layout
-        layout.prop(context.scene, "import_export_mat")
+        layout.prop(context.scene, "material_io_import_export")
         layout.separator()
         
-        if context.scene.import_export_mat == "2":
-            layout.prop(context.scene, "save_path_export")
-            layout.prop(context.scene, "image_save_type")
-            layout.prop(context.scene, "export_materials_type")
-            layout.prop(context.scene, "compress_folder", icon="FILTER")
+        if context.scene.material_io_import_export == "2":
+            layout.prop(context.scene, "material_io_export_path")
+            layout.prop(context.scene, "material_io_image_save_type")
+            layout.prop(context.scene, "material_io_export_type")
+            layout.prop(context.scene, "material_io_is_compress", icon="FILTER")
             layout.separator()
             layout.operator("export.material_io_export", icon="ZOOMOUT")
                   
         else:
-            layout.prop(context.scene, "save_path_import")        
-            layout.prop(context.scene, "import_materials_type")
-            layout.prop(context.scene, "add_material_auto", icon="MATERIAL")
+            layout.prop(context.scene, "material_io_import_path")        
+            layout.prop(context.scene, "material_io_import_type")
+            layout.prop(context.scene, "material_io_is_auto_add", icon="MATERIAL")
             layout.separator()       
             layout.operator("import.material_io_import", icon="ZOOMIN")
 
