@@ -22,6 +22,7 @@ from xml.dom.minidom import parse as pretty_parse
 import zipfile
 import string
 from mathutils import *
+import json
 
 
 def make_tuple(data):
@@ -244,6 +245,7 @@ def export_material(self, context):
         
         if mat is not None:
             root = ET.Element("material")
+            json_root = {}
             names = {}
             data, images = [], []
             m_links, m_nodes = [], []
@@ -269,47 +271,30 @@ def export_material(self, context):
             date_string = "{}/{}/{} at {}:{}:{} in {}".format(t.month, t.day, t.year, t.hour, t.minute,
                                                               t.second, tzname[0])
 
-            root.attrib = {"Render_Engine": context.scene.render.engine, "Material_Name": serialize(mat.name),
-                           "Node_Group_Name": serialize(node_group_name), "Date_Created": date_string,
-                           "Number_Of_Nodes": ""}
-
-            link_counter = 0
             node_counter = 0
             for group in names:
-                sub_e = ET.SubElement(root, group.replace("/", "_"))
-                d = data[names[group]]
-                sub_e_nodes = ET.SubElement(sub_e, group.replace("/", "_") + "_nodes")
-                for i in d[0]:  # nodes
-                    ET.SubElement(sub_e_nodes, "node" + str(node_counter), {"inputs": i["inputs"],
-                                                                            "outputs": i["outputs"],
-                                                                            "node_specific": i["node_specific"],
-                                                                            "bl_idname": i["bl_idname"]})
-                    node_counter += 1
+                json_root[group] = {'nodes': data[names[group]][0], 'links': data[names[group]][1]}
 
-                sub_e_links = ET.SubElement(sub_e, group.replace("/", "_") + "_links")
-                for i in d[1]:  # links
-                    ET.SubElement(sub_e_links, "link" + str(link_counter), {"link_info": i})
-                    link_counter += 1
-
-            root.attrib["Number_Of_Nodes"] = str(node_counter)
             # get order of groups
             pre_order = sorted(names.items(), key=operator.itemgetter(1))
             order = [i[0].replace("/", "_") for i in pre_order]
-            root.attrib["Group_Order"] = str(order)
+            json_root['__info__'] = {'number_of_nodes': node_counter, 'group_order': order, "render_engine":
+                                     context.scene.render.engine, "material_name": serialize(mat.name),
+                                     "node_group_name": serialize(node_group_name), "date_created": date_string}
 
             # images
             img_out = []  # collect all images to place as attribute of root element so they can be imported first
 
             # absolute filepaths
             if context.scene.material_io_image_save_type == "1":
-                root.attrib["Path_Type"] = "Absolute"
+                json_root['__info__']['path_type'] = "absolute"
 
                 # of format [node, node,...] where each node is [image, image,...] and image is [name, path]
                 for node in images:
                     for image in node:
                         img_out.append([image[0], bpy.path.abspath(image[1])])
             else:  # relative filepaths
-                root.attrib["Path_Type"] = "Relative"
+                json_root['__info__']['path_type'] = "relative"
 
                 for node in images:
                     for image in node:
@@ -318,22 +303,17 @@ def export_material(self, context):
                         img_out.append([image[0], os_file_sep + image_name])
                         copyfile(image_path, folder_path + os_file_sep + image_name)
 
-            root.attrib["Images"] = str(img_out)
-            tree = ET.ElementTree(root)
-            print(tree)
+            json_root['__info__']['images'] = img_out
             save_path = folder_path + os_file_sep + mat_name + ".bmat"
 
             try:
-                tree.write(save_path)
+                file = open(save_path, 'w')
+                json.dump(json_root, file)
+                file.close()
             except (PermissionError, FileNotFoundError):
                 self.report({"ERROR"}, "Permission Denied '{}'".format(save_path))
                 return
 
-            pretty_file = pretty_parse(save_path)
-            pretty_text = pretty_file.toprettyxml()
-            file = open(save_path, "w+")
-            file.write(pretty_text)
-            file.close()
 
     # zip folder
     if folder_path != export_path and context.scene.material_io_is_compress:  # if folder has been created
