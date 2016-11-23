@@ -39,281 +39,59 @@ def serialize(name):  # serialize names
     return f
 
 
-def export_node_type(n):
-    t = n.type
-    is_group = False
-    images = []
-    ns = []  # node specific information
-    i = []  # inputs
-    o = []  # outputs
-
-    # basic info
-    out = {"name": serialize(n.name), "bl_idname": n.bl_idname, "label": serialize(n.label),
-           "location": make_tuple(n.location), "hide": str(n.hide), "height": str(n.height), "width": str(n.width),
-           "mute": str(n.mute), "color": make_tuple(n.color), "use_custom_color": str(n.use_custom_color)}
-
-    if n.parent is None:
-        out["parent"] = n.parent
-    else:
-        out["parent"] = serialize(n.parent.name)
-
-    # inputs
-    for j in range(len(n.inputs)):
-        if t not in ("GROUP_INPUT", "GROUP_OUTPUT"):
-            data = n.inputs[j]
-            if data.type in ("RGBA", "RGB", "VECTOR"):
-                i.append(j)
-                i.append(make_tuple(data.default_value))
-            elif data.type == "VALUE":
-                i.append(j)
-                i.append(data.default_value)
-            elif t == "GROUP" and data.type == "SHADER":
-                i.append(j)
-                i.append("SHADER")
-
-    # input nodes
-    if t == "TEX_COORD":
-        ns = ["from_dupli", n.from_dupli]
-    elif t == "ATTRIBUTE":
-        ns = ["attribute_name", n.attribute_name]
-    elif t == "TANGENT":
-        ns = ["direction_type", n.direction_type, "axis", n.axis]
-    elif t == "WIREFRAME":
-        ns = ["use_pixel_size", n.use_pixel_size]
-    elif t == "UVMAP":
-        ns = ["uv_map", n.uv_map, "from_dupli", n.from_dupli]
-    elif t == "LAMP":
-        ns = ["lamp_object", n.lamp_object]
-    elif t == "MATERIAL":
-        ns = ["use_diffuse", n.use_diffuse, "use_specular", n.use_specular, "invert_normal", n.invert_normal,
-              "material", n.material.name]
-    # shader nodes
-    elif t == "BSDF_GLOSSY":
-        ns = ["distribution", n.distribution]
-    elif t in ("BSDF_REFRACTION", "BSDF_GLASS", "BSDF_TOON", "VOLUME_SCATTER"):
-        if t in ("BSDF_REFRACTION", "BSDF_GLASS"):
-            ns = ["distribution", n.distribution]
-        elif t == "BSDF_TOON":
-            ns = ["component", n.component]
-    elif t == "BSDF_ANISOTROPIC":
-        ns = ["distribution", n.distribution]
-    elif t == "SUBSURFACE_SCATTERING":
-        ns = ["falloff", n.falloff]    
-    elif t == "BSDF_HAIR":
-        ns = ["component", n.component]
-    # texture nodes
-    elif t == "TEX_IMAGE":
-        ns = ["color_space", n.color_space, "projection", n.projection, "interpolation", n.interpolation]
-        if n.image is not None:
-            ns += ["image", n.image.name]
-            images.append([n.image.name, n.image.filepath])
-    elif t == "TEX_ENVIROMENT":
-        ns = ["image", n.image.name, "color_space", n.color_space, "projection", n.projection]
-        if n.image is not None:
-            ns += ["image", n.image.name]
-            images.append([n.image.name, n.image.filepath])
-    elif t == "TEX_SKY":
-        ns = ["sky_type", n.sky_type, "sun_direction", make_tuple(n.sun_direction), "turbidity", n.turbidity,
-              "ground_albedo", n.ground_albedo]
-    elif t == "TEX_WAVE":
-        ns = ["wave_type", n.wave_type]
-    elif t == "TEX_VORONOI":
-        ns = ["coloring", n.coloring]
-    elif t == "TEX_MUSGRAVE":
-        ns = ["musgrave_type", n.musgrave_type]
-    elif t == "TEX_GRADIENT":
-        ns = ["gradient_type", n.gradient_type]
-    elif t == "TEX_MAGIC":
-        ns = ["turbulence_depth", n.turbulence_depth]
-    elif t == "TEX_BRICK":
-        ns = ["offset", n.offset, "squash", n.squash, "offset_frequency", n.offset_frequency, "squash_frequency",
-              n.squash_frequency]
-    elif t == "TEX_POINTDENSITY":
-        ns = ["point_source", n.point_source, "object", n.object.name, "particle_system",
-              [n.object.name, n.particle_system.name], "space", n.space, "radius", n.radius, "interpolation",
-              n.interpolation, "resolution", n.resolution, "particle_color_source", n.particle_color_source]
-    # Color nodes
-    elif t == "MIX_RGB":
-        ns = ["blend_type", n.blend_type, "use_clamp", n.use_clamp]
-    elif t in ("CURVE_RGB", "CURVE_VEC"):
-        # get curves
-        curves = [make_tuple(n.mapping.black_level), make_tuple(n.mapping.white_level), str(n.mapping.clip_max_x),
-                  str(n.mapping.clip_max_y), str(n.mapping.clip_min_x), str(n.mapping.clip_min_y),
-                  str(n.mapping.use_clip)]
-
-        for curve in n.mapping.curves:
-            points = [curve.extend]
-            for point in curve.points:
-                points.append([make_tuple(point.location), point.handle_type])
-            curves.append(points)
-        ns = ["mapping", curves]
-    # Vector nodes
-    elif t == "MAPPING":
-        ns = ["vector_type", n.vector_type, "translation", make_tuple(n.translation), "rotation",
-              make_tuple(n.rotation), "scale", make_tuple(n.scale), "use_min", n.use_min, "use_max", n.use_max,
-              "min", make_tuple(n.min), "max", make_tuple(n.max)]
-    elif t == "BUMP":
-        ns = ["invert", n.invert]
-    elif t == "NORMAL_MAP":
-        ns = ["space", n.space, "uv_map", n.uv_map]
-    elif t == "NORMAL":
-        o = [0, make_tuple(n.outputs[0].default_value)]
-    elif t == "VECT_TRANSFORM":
-        ns = ["vector_type", n.vector_type, "convert_from", n.convert_from, "convert_to", n.convert_to]
-    # Converter nodes
-    elif t == "MATH":
-        ns = ["operation", n.operation, "use_clamp", n.use_clamp]
-    elif t == "VALTORGB":
-        els = []
-        for j in n.color_ramp.elements:
-            cur_el = [j.position, make_tuple(j.color)]            
-            els.append(cur_el)       
-        ns = ["color_ramp.color_mode", n.color_ramp.color_mode, "color_ramp.interpolation", n.color_ramp.interpolation,
-              "color_ramp.elements", els]
-    elif t == "VECT_MATH":
-        ns = ["operation", n.operation]      
-    # Script node
-    elif t == "SCRIPT":
-        ns = ["mode", n.mode, "script", n.script]
-    # Group nodes
-    elif t == "GROUP":
-        is_group = True              
-        ns = ["node_tree.name", serialize(n.node_tree.name)]
-    elif t == "GROUP_INPUT":
-        temp = []
-        for i2 in n.outputs:
-            if i2.type != "CUSTOM":
-                temp.append(i2.bl_idname)
-                temp.append(serialize(i2.name))
-            ns = ["group_input", temp]
-    elif t == "GROUP_OUTPUT":
-        temp = []
-        for i2 in n.inputs:
-            if i2.type != "CUSTOM":
-                temp.append(i2.bl_idname)
-                temp.append(serialize(i2.name))
-        ns = ["group_output", temp]
-        
-    # Add-on Specific
-    elif t == "CUSTOM":
-        node_id = n.bl_idname
-
-        # Generic Note Node Add-on
-        if node_id == "GenericNoteNode":
-            if n.text == "" and n.text_file != "":
-                text = ""
-                t_file = bpy.data.texts.get(n.text_file)
-                for line in t_file.lines:
-                    text += line.body + "\n"
-            else:
-                text = n.text
-                
-            ns = ["text", text]
-        
-        # Mitsuba nodes
-        elif node_id == "MtsNodeInput_spectrum":
-            ns = ["samples", n.samples, "wavelength", n.wavelength, "value", n.value]
-        elif node_id == "MtsNodeInput_spdfile":
-            ns = ["filename", n.filename]
-        elif node_id == "MtsNodeInput_blackbody":
-            ns = ["temperature", n.temperature, "scale", n.scale]
-        elif node_id == "MtsNodeInput_uvmapping":
-            ns = ["uscale", n.uscale, "vscale", n.vscale, "uoffset", n.uoffset, "voffset", n.voffset]
-        elif node_id == "MtsNodeInput_rgb":
-            ns = ["color_mode", n.color_mode, "color", make_tuple(n.color), "gain_r", n.gain_r, "gain_g", n.gain_g,
-                  "gain_b", n.gain_b]
-        # BSDF
-        elif node_id == "MtsNodeBsdf_diffuse":
-            ns = ["useFastApprox", n.useFastApprox]
-        elif node_id == "MtsNodeBsdf_dielectric":
-            ns = ["thin", n.thin, "intIOR", n.intIOR, "extIOR", n.extIOR, "distribution", n.distribution,
-                  "anisotropic", n.anisotropic]
-        elif node_id == "MtsNodeBsdf_conductor":
-            ns = ["material", n.material, "extEta", n.extEta, "distribution", n.distribution, "anisotropic",
-                  n.anisotropic]
-        elif node_id == "MtsNodeBsdf_plastic":
-            ns = ["intIOR", n.intIOR, "extIOR", n.extIOR, "nonlinear", n.nonlinear, "distribution", n.distribution]
-        elif node_id == "MtsNodeBsdf_coating":
-            ns = ["intIOR", n.intIOR, "extIOR", n.extIOR, "thickness", n.thickness, "distribution", n.distribution]
-        elif node_id == "MtsNodeBsdf_bumpmap":
-            ns = ["scale", n.scale]
-        elif node_id == "MtsNodeBsdf_ward":
-            ns = ["variant", n.variant, "anisotropic", n.anisotropic]
-        elif node_id == "MtsNodeBsdf_hk":
-            ns = ["useAlbSigmaT", n.useAlbSigmaT, "thickness", n.thickness]
-        # Texture
-        elif node_id == "MtsNodeTexture_bitmap":
-            ns = ["filename", n.filename, "wrapModeU", n.wrapModeU, "wrapModeV", n.wrapModeV, "gammaType", n.gammaType,
-                  "filterType", n.filterType, "cache", n.cache, "maxAnisotropy", n.maxAnisotropy]
-            images.append([n.filename, n.filename])
-        elif node_id == "MtsNodeTexture_gridtexture":
-            ns = ["lineWidth", n.lineWidth]
-        elif node_id == "MtsNodeTexture_scale":
-            ns = ["scale", n.scale]
-        elif node_id == "MtsNodeTexture_wireframe":
-            ns = ["lineWidth", n.lineWidth, "stepWidth", n.stepWidth]
-        elif node_id == "MtsNodeTexture_curvature":
-            ns = ["curvature", n.curvature, "scale", n.scale]
-        # Subsurface
-        elif node_id == "MtsNodeSubsurface_dipole":
-            ns = ["useAlbSigmaT", n.useAlbSigmaT, "scale", n.scale, "intIOR", n.intIOR, "extIOR", n.extIOR]
-        elif node_id == "MtsNodeSubsurface_singlescatter":
-            ns = ["fastSingleScatter", n.fastSingleScatter, "fssSamples", n.fssSamples, "singleScatterDepth",
-                  n.singleScatterDepth, "useAlbSigmaT", n.useAlbSigmaT]
-        # Emitter
-        elif node_id in ("MtsNodeEmitter_area", "MtsNodeEmitter_point", "MtsNodeEmitter_spot",
-                         "MtsNodeEmitter_directional",
-                         "MtsNodeEmitter_collimated"):
-            if node_id == "MtsNodeEmitter_point":
-                ns = ["size", n.size]
-            elif node_id == "MtsNodeEmitter_spot":
-                ns = ["cutoffAngle", n.cutoffAngle, "spotBlend", n.spotBlend, "showCone", n.showCone]
-                
-            if ns == "":
-                ns = ["samplingWeight", n.samplingWeight, "scale", n.scale]
-            else:
-                ns = ["samplingWeight", n.samplingWeight, "scale", n.scale]
-        
-    # layout
-    if len(ns) == 0:
-        ns = ""
-    if len(i) == 0:
-        i = ""
-    if len(o) == 0:
-        o = ""
-                        
-    out["node_specific"] = ns
-    out["inputs"] = i
-    out["outputs"] = o
-
-    return out, is_group, images
-
-
-def export_node_type_inspection(n: bpy.types.Node):
+def collect_node_data(n: bpy.types.Node):
     ns, inputs, outputs, images = [], [], [], []
+    is_group = True if n.type == "GROUP" else False
 
-    # inputs
-    for j in range(len(n.inputs)):
-        if n.type not in ("GROUP_INPUT", "GROUP_OUTPUT"):
-            data = n.inputs[j]
-            if data.type in ("RGBA", "RGB", "VECTOR"):
-                inputs.append(j)
-                inputs.append(make_tuple(data.default_value))
-            elif data.type == "VALUE":
-                inputs.append(j)
-                inputs.append(data.default_value)
-            elif n.type == "GROUP" and data.type == "SHADER":
-                inputs.append(j)
-                inputs.append("SHADER")
+    if n.bl_idname != "NodeReroute":  # Reroute does have in and out, but does not know type until linked
+        # inputs
+        if n.type != "GROUP_INPUT":
+            for j in range(len(n.inputs)):
+                data = n.inputs[j]
+                if data.type in ("RGBA", "RGB", "VECTOR"):
+                    inputs.append(j)
+                    inputs.append(make_tuple(data.default_value))
+                elif data.type == "VALUE":
+                    inputs.append(j)
+                    inputs.append(data.default_value)
+                elif n.type == "GROUP" and data.type == "SHADER":
+                    inputs.append(j)
+                    inputs.append("SHADER")
+        else:
+            temp = []
+            for i in n.inputs:
+                temp.append(i.bl_idname)
+                temp.append(serialize(i.name))
+            ns += ["group_input", temp]
 
-    # list of default values
+        # outputs
+        if n.type != "GROUP_OUTPUT":
+            for j in range(len(n.outputs)):
+                data = n.outputs[j]
+                if data.type in ("RGBA", "RGB", "VECTOR"):
+                    outputs.append(j)
+                    outputs.append(make_tuple(data.default_value))
+                elif data.type == "VALUE":
+                    outputs.append(j)
+                    outputs.append(data.default_value)
+                elif n.type == "GROUP" and data.type == "SHADER":
+                    outputs.append(j)
+                    outputs.append("SHADER")
+        else:
+            temp = []
+            for i in n.outputs:
+                temp.append(i.bl_idname)
+                temp.append(serialize(i.name))
+            ns += ["group_output", temp]
+
+    # list of default values to ignore for smaller file-size, or because not needed, also if property is read-only
     exclude_list = ['__doc__', '__module__', '__slots__', 'bl_description', 'bl_height_default', 'bl_height_max',
                     'bl_height_min', 'bl_icon', 'bl_rna', 'bl_static_type', 'bl_width_default', 'bl_width_min',
                     'bl_width_max', 'color_mapping', 'draw_buttons', 'draw_buttons_ext', 'image_user', 'input_template',
                     'inputs', 'internal_links', 'is_registered_node_type', 'bl_label', 'output_template', 'outputs',
                     'poll', 'poll_instance', 'rna_type', 'shading_compatibility', 'show_options', 'show_preview',
                     'show_texture', 'socket_value_update', 'texture_mapping', 'type', 'update', 'viewLocation',
-                    'width_hidden']
+                    'width_hidden', 'bl_idname', 'dimensions', 'isAnimationNode']
     exclude = {}  # for checking item membership, dict is faster then list
     for i in exclude_list:
         exclude[i] = i
@@ -323,12 +101,41 @@ def export_node_type_inspection(n: bpy.types.Node):
             t = method[1]
             val = eval("n.{}".format(method[0]))  # get value
 
-            if isinstance(t, (Vector, Color, Euler, Quaternion)):
+            if isinstance(t, (Vector, Color, Euler, Quaternion)):  # TUPLE
                 ns += [method[0], make_tuple(val)]
-            else:
-                ns += [method[0], val]
+            elif isinstance(t, bpy.types.CurveMapping):  # CURVES
+                curves = [make_tuple(n.mapping.black_level), make_tuple(n.mapping.white_level),
+                          str(n.mapping.clip_max_x), str(n.mapping.clip_max_y), str(n.mapping.clip_min_x),
+                          str(n.mapping.clip_min_y), str(n.mapping.use_clip)]
 
-    return {"inputs": inputs, "outputs": outputs, "node_specific": ns}
+                for curve in n.mapping.curves:
+                    points = [curve.extend]
+                    for point in curve.points:
+                        points.append([make_tuple(point.location), point.handle_type])
+                    curves.append(points)
+                ns += ["mapping", curves]
+            elif isinstance(t, bpy.types.ColorRamp):  # COLOR RAMP
+                els = []
+                for j in n.color_ramp.elements:
+                    cur_el = [j.position, make_tuple(j.color)]
+                    els.append(cur_el)
+                ns += ["color_ramp.color_mode", n.color_ramp.color_mode, "color_ramp.interpolation",
+                       n.color_ramp.interpolation, "color_ramp.elements", els]
+            elif isinstance(t, bpy.types.NodeTree):  # NODE TREE
+                ns += ["node_tree.name", val.name]
+            elif isinstance(t, bpy.types.Image) and n.image is not None:  # IMAGE
+                ns += ["image", n.image.name]
+                images.append([n.image.name, n.image.filepath])
+            elif isinstance(t, bpy.types.ParticleSystem):  # PARTICLE SYSTEM - needs objects and particle system
+                ns += [method[0], [n.object, val.name]]
+            elif isinstance(t, str):  # STRING
+                ns += [method[0], serialize(val)]
+            elif isinstance(t, (int, float)):  # FlOAT, INTEGER
+                ns += [method[0], val]
+            elif isinstance(t, bpy.types.Node):  # FRAME NODE
+                ns += [method[0], serialize(val.name)]
+
+    return [{"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}, is_group, images]
 
 
 # recursive method that collects all nodes and if group node goes and collects its nodes
@@ -338,7 +145,7 @@ def collect_nodes(nodes, links, images, names, name, data):
     m_l = []
     
     for n in nodes:  # nodes
-        out, is_group, im = export_node_type(n)
+        out, is_group, im = collect_node_data(n)
         m_n.append(out)
         images.append(im)
         
@@ -473,20 +280,10 @@ def export_material(self, context):
                 d = data[names[group]]
                 sub_e_nodes = ET.SubElement(sub_e, group.replace("/", "_") + "_nodes")
                 for i in d[0]:  # nodes
-                    ET.SubElement(sub_e_nodes, "node" + str(node_counter), {"name": i["name"],
-                                                                            "bl_idname": i["bl_idname"],
-                                                                            "label": i["label"],
-                                                                            "color": i["color"],
-                                                                            "parent": str(i["parent"]),
-                                                                            "location": i["location"],
-                                                                            "height": i["height"],
-                                                                            "width": i["width"],
-                                                                            "mute": i["mute"],
-                                                                            "hide": i["hide"],
-                                                                            "inputs": i["inputs"],
+                    ET.SubElement(sub_e_nodes, "node" + str(node_counter), {"inputs": i["inputs"],
                                                                             "outputs": i["outputs"],
                                                                             "node_specific": i["node_specific"],
-                                                                            "use_custom_color": i["use_custom_color"]})
+                                                                            "bl_idname": i["bl_idname"]})
                     node_counter += 1
 
                 sub_e_links = ET.SubElement(sub_e, group.replace("/", "_") + "_links")
@@ -652,6 +449,8 @@ def import_material(self, context):
                     parents = []
 
                     for node in data:
+                        parent = []
+
                         # check if node is custom then make sure it is installed
                         if node.attrib["bl_idname"] == "GenericNoteNode" and \
                                 ("generic_note" not in bpy.context.user_preferences.addons.keys() and
@@ -664,28 +463,6 @@ def import_material(self, context):
                                 temp = nt.nodes.new(node.attrib["bl_idname"])
                             else:
                                 temp = nt.new(node.attrib["bl_idname"])
-
-                            # adjust basic node attributes
-                            temp.location = s_to_t(node.attrib["location"])
-                            temp.name = node.attrib["name"]
-                            temp.label = node.attrib["label"]
-                            temp.mute = ast.literal_eval(node.attrib["mute"])
-                            temp.height = float(node.attrib["height"])
-                            temp.width = float(node.attrib["width"])
-
-                            # see if custom color is in file, should be if newer version
-                            if "use_custom_color" in node.attrib and "color" in node.attrib:
-                                if node.attrib["use_custom_color"] == "True":
-                                    temp.use_custom_color = True
-                                temp.color = s_to_t(node.attrib["color"])
-
-                            # check for parent, like layout frame
-                            if node.attrib["parent"] != "None":
-                                parents.append([node.attrib["name"], node.attrib["parent"],
-                                                s_to_t(node.attrib["location"])])
-
-                            # hide if needed
-                            temp.hide = True if node.attrib["hide"] == "True" else False
 
                             # node specific is first so that groups are set up first
                             nos = node.attrib["node_specific"]
@@ -703,7 +480,9 @@ def import_material(self, context):
                                                 nt.inputs.new(sub_val[0], sub_val[1])
                                             else:
                                                 nt.outputs.new(sub_val[0], sub_val[1])
-                                    else:
+                                    elif att == "parent" and val is not None:
+                                        parent.append(val)
+                                    elif val is not None:
                                         set_attributes(temp, val, att)
 
                             # inputs
@@ -719,14 +498,22 @@ def import_material(self, context):
                                 out = ast.literal_eval(ous)
                                 for i in range(0, len(out), 2):
                                     temp.outputs[out[i]].default_value = out[i + 1]
+
+                            # deal with parent
+                            if parent:
+                                parent += [temp.name, temp.location]
+                                parents.append(parent)
+
+                    # TODO: Fix parent and child location issues
                     # set parents
                     for parent in parents:
+                        print(parent)
                         if group.tag != "main":
-                            nt.nodes[parent[0]].parent = nt.nodes[parent[1]]
-                            nt.nodes[parent[0]].location = parent[2]
+                            nt.nodes[parent[1]].parent = nt.nodes[parent[0]]
+                            nt.nodes[parent[1]].location = parent[2]
                         else:
-                            nt[parent[0]].parent = nt[parent[1]]
-                            nt[parent[0]].location = parent[2]
+                            nt[parent[1]].parent = nt[parent[0]]
+                            nt[parent[1]].location = parent[2]
 
                 # create links
                 else:
@@ -818,7 +605,7 @@ def set_attributes(temp, val, att):
                 temp_point = temp.mapping.curves[counter].points.new(i2[0][0], i2[0][1])
                 temp_point.handle_type = i2[1]
             counter += 1
-    elif val:
+    else:
         if isinstance(val, str):
             exec("temp.{} = '{}'".format(att, val))
         else:
