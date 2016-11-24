@@ -44,20 +44,30 @@ def collect_node_data(n: bpy.types.Node):
     ns, inputs, outputs, dependencies = [], [], [], []
     is_group = True if n.type == "GROUP" else False
 
-    if n.bl_idname != "NodeReroute":  # Reroute does have in and out, but does not know type until linked
+    # certain nodes and sockets do not support some operations, like having no .inputs or .outputs, or no .default_value
+    node_exclude_list = ['NodeReroute']
+    # sockets that don't have .default_value
+    socket_exclude_list = ['MtsSocketBsdf', 'MtsSocketSubsurface', 'MtsSocketMedium', 'MtsSocketEmitter',
+                           'MtsSocketSpectrum', 'MtsSocketColor', 'MtsSocketUVMapping', 'MtsSocketLamp',
+                           'MtsSocketFloat', 'MtsSocketTexture']
+
+    if n.bl_idname not in node_exclude_list:  # Reroute does have in and out, but does not know type until linked
         # inputs
-        if n.type != "GROUP_INPUT":
+        if n.bl_idname != "NodeGroupInput":
             for j in range(len(n.inputs)):
                 data = n.inputs[j]
-                if data.type in ("RGBA", "RGB", "VECTOR"):
-                    inputs.append(j)
-                    inputs.append(make_tuple(data.default_value))
-                elif data.type == "VALUE":
-                    inputs.append(j)
-                    inputs.append(round(data.default_value, 4))
-                elif n.type == "GROUP" and data.type == "SHADER":
-                    inputs.append(j)
-                    inputs.append("SHADER")
+                if data.bl_idname not in socket_exclude_list:
+                    if n.type == "GROUP" and data.type == "SHADER":  # do not have default_value, but still needed
+                        inputs.append(j)
+                        inputs.append("SHADER")
+                    else:
+                        val = data.default_value
+                        if isinstance(val, (Color, Euler, Quaternion, Vector)):
+                            inputs.append(j)
+                            inputs.append(make_tuple(data.default_value))
+                        elif isinstance(val, (float, int)):
+                            inputs.append(j)
+                            inputs.append(round(data.default_value, 4))
         else:
             temp = []
             for i in n.inputs:
@@ -66,18 +76,21 @@ def collect_node_data(n: bpy.types.Node):
             ns += ["group_input", temp]
 
         # outputs
-        if n.type != "GROUP_OUTPUT":
+        if n.bl_idname != "NodeGroupOutput":
             for j in range(len(n.outputs)):
                 data = n.outputs[j]
-                if data.type in ("RGBA", "RGB", "VECTOR"):
-                    outputs.append(j)
-                    outputs.append(make_tuple(data.default_value))
-                elif data.type == "VALUE":
-                    outputs.append(j)
-                    outputs.append(round(data.default_value, 4))
-                elif n.type == "GROUP" and data.type == "SHADER":
-                    outputs.append(j)
-                    outputs.append("SHADER")
+                if data.bl_idname not in socket_exclude_list:
+                    if n.type == "GROUP" and data.type == "SHADER":  # do not have default_value, but still needed
+                        outputs.append(j)
+                        outputs.append("SHADER")
+                    else:
+                        val = data.default_value
+                        if isinstance(val, (Color, Euler, Quaternion, Vector)):
+                            outputs.append(j)
+                            outputs.append(make_tuple(data.default_value))
+                        elif isinstance(val, (float, int)):
+                            outputs.append(j)
+                            outputs.append(round(data.default_value, 4))
         else:
             temp = []
             for i in n.outputs:
@@ -215,7 +228,7 @@ def export_node_tree(self, context):
 
     # COLLECT NEED INFORMATION: to_export allows multiple node_trees at a time. Info formatted into dict
     # {"nodes":____, "links":____, "name":____, "bl_idname":_____}
-    if node_tree.bl_idname == "ShaderNodeTree":
+    if node_tree.bl_idname in ("ShaderNodeTree", "MitsubaShaderNodeTree"):
         to_export.append({"nodes": node_tree.nodes, "links": node_tree.links, "name":
                          context.active_object.active_material.name, "bl_idname": node_tree.bl_idname})
 
@@ -256,7 +269,7 @@ def export_node_tree(self, context):
         order = [i[0].replace("/", "_") for i in pre_order]
         json_root['__info__'] = {'number_of_nodes': node_counter, 'group_order': order, "render_engine":
                                  context.scene.render.engine, "node_tree_name": serialize(node_tree["name"]),
-                                 "date_created": date_string, "version": version_number, "node_tree_type":
+                                 "date_created": date_string, "version": version_number, "node_tree_id":
                                      node_tree["bl_idname"]}
 
         # dependencies
@@ -348,7 +361,7 @@ def import_node_tree(self, context):
         node_tree, nodes, links = None, None, None
 
         # determine type
-        if root['__info__']['node_tree_type'] == 'ShaderNodeTree':
+        if root['__info__']['node_tree_id'] == 'ShaderNodeTree':
             node_tree = bpy.data.materials.new(root['__info__']['node_tree_name'])
 
             # make sure in correct render mode
@@ -361,14 +374,13 @@ def import_node_tree(self, context):
             node_tree.use_nodes = True
             nodes = node_tree.node_tree.nodes
             links = node_tree.node_tree.links
-
-            # elif root['__info__'][
-            #     'render_engine'] == "MITSUBA_RENDER" and context.scene.render.engine == "MITSUBA_RENDER":
-            #     node_group = bpy.data.node_groups.new(name=root['__info__']['node_tree_name'],
-            #                                           type="MitsubaShaderNodeTree")
-            #     nodes = node_group.nodes
-            #     links = node_group.links
-            #     node_tree.mitsuba_nodes.nodetree = node_group.name
+        elif root['__info__']['node_tree_id'] == "MitsubaShaderNodeTree":
+            node_tree = bpy.data.materials.new(root['__info__']['node_tree_name'])
+            mitsuba_tree = bpy.data.node_groups.new(name=root['__info__']['node_tree_name'],
+                                                    type="MitsubaShaderNodeTree")
+            nodes = mitsuba_tree.nodes
+            links = mitsuba_tree.links
+            node_tree.mitsuba_nodes.nodetree = mitsuba_tree.name
 
         # remove any default nodes
         for i in nodes:
@@ -378,20 +390,18 @@ def import_node_tree(self, context):
         dependencies = root['__info__']['dependencies']
         depend_errors = 0
 
-        # don't load image if Render_Engine is MITSUBA_RENDER because it uses absolute file paths
-        if root['__info__']['render_engine'] != "MITSUBA_RENDER":
-            for depend in dependencies:
-                if depend[0] == "image" and depend[1] not in bpy.data.images:
-                    try:
-                        if root['__info__']['path_type'] == "Relative":
-                            bpy.data.images.load(folder_path + os_file_sep + depend[1])
-                        else:
-                            bpy.data.images.load(depend[2])
-                    except RuntimeError:
-                        depend_errors += 1
+        for depend in dependencies:
+            if depend[0] == "image" and depend[1] not in bpy.data.images:
+                try:
+                    if root['__info__']['path_type'] == "Relative":
+                        bpy.data.images.load(folder_path + os_file_sep + depend[1])
+                    else:
+                        bpy.data.images.load(depend[2])
+                except RuntimeError:
+                    depend_errors += 1
 
-            if depend_errors:
-                self.report({"ERROR"}, str(depend_errors) + " Dependency(ies) Couldn't Be Loaded")
+        if depend_errors:
+            self.report({"ERROR"}, str(depend_errors) + " Dependency(ies) Couldn't Be Loaded")
 
         # add new nodes
         order = root['__info__']['group_order']
@@ -483,14 +493,15 @@ def import_node_tree(self, context):
 
                 is_nodes = not is_nodes
 
-        if root['__info__']['render_engine'] != "MITSUBA_RENDER":
+        if root['__info__']['node_tree_id'] != "MitsubaShaderNodeTree":
             # get rid of extra groups
             for i in bpy.data.node_groups:
                 if i.users == 0:
                     bpy.data.node_groups.remove(i)
 
         # add material to object
-        if context.object is not None and context.scene.node_io_is_auto_add:
+        if context.object is not None and context.scene.node_io_is_auto_add and root['__info__']['node_tree_id'] in \
+                ('ShaderNodeTree', 'MitsubaShaderNodeTree'):
             context.object.data.materials.append(node_tree)
 
 
