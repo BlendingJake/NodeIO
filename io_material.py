@@ -51,6 +51,8 @@ def collect_node_data(n: bpy.types.Node):
     socket_exclude_list = ['MtsSocketBsdf', 'MtsSocketSubsurface', 'MtsSocketMedium', 'MtsSocketEmitter',
                            'MtsSocketSpectrum', 'MtsSocketColor', 'MtsSocketUVMapping', 'MtsSocketLamp',
                            'MtsSocketFloat', 'MtsSocketTexture']
+    # types that can be converted to lists
+    list_types = [Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array]
 
     if n.bl_idname not in node_exclude_list:  # Reroute does have in and out, but does not know type until linked
         # inputs
@@ -63,7 +65,7 @@ def collect_node_data(n: bpy.types.Node):
                         inputs.append("SHADER")
                     else:
                         val = data.default_value
-                        if isinstance(val, (Color, Euler, Quaternion, Vector, bpy.types.bpy_prop_array)):  # list
+                        if isinstance(val, list_types):  # list
                             inputs.append(j)
                             inputs.append(make_tuple(data.default_value))
                         elif isinstance(val, (float, int)):
@@ -86,7 +88,7 @@ def collect_node_data(n: bpy.types.Node):
                         outputs.append("SHADER")
                     else:
                         val = data.default_value
-                        if isinstance(val, (Color, Euler, Quaternion, Vector, bpy.types.bpy_prop_array)):  # list
+                        if isinstance(val, list_types):  # list
                             outputs.append(j)
                             outputs.append(make_tuple(data.default_value))
                         elif isinstance(val, (float, int)):
