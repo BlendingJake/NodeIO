@@ -12,13 +12,10 @@ import bpy
 from bpy.props import StringProperty, EnumProperty, BoolProperty
 from datetime import datetime
 from time import tzname
-import xml.etree.cElementTree as ET
-import ast
 import operator
 from inspect import getmembers
 from os import path, mkdir, listdir, walk, remove as remove_file, sep as os_file_sep
 from shutil import copyfile, rmtree
-from xml.dom.minidom import parse as pretty_parse
 import zipfile
 import string
 from mathutils import *
@@ -244,7 +241,6 @@ def export_material(self, context):
                 mat = None
         
         if mat is not None:
-            root = ET.Element("material")
             json_root = {}
             names = {}
             data, images = [], []
@@ -314,7 +310,6 @@ def export_material(self, context):
                 self.report({"ERROR"}, "Permission Denied '{}'".format(save_path))
                 return
 
-
     # zip folder
     if folder_path != export_path and context.scene.material_io_is_compress:  # if folder has been created
         if path.exists(folder_path + ".zip"):  # if zipped file is already there, delete
@@ -366,25 +361,29 @@ def import_material(self, context):
 
     # for each .bmat file import and create material
     for file_path in import_list:
-        tree = ET.parse(file_path)
-        root = tree.getroot()
-        mat = bpy.data.materials.new(root.attrib["Material_Name"])
+        file = open(file_path, 'r')
+        root = json.load(file)
+        file.close()
+
+        mat = bpy.data.materials.new(root['__info__']['material_name'])
         nodes = None
         links = None
 
         # make sure in correct render mode
-        if root.attrib["Render_Engine"] != context.scene.render.engine:
-            self.report({"ERROR"}, "Cannot Continue: Please Switch To '{}' Engine".format(root.attrib["Render_Engine"]))
+        if root['__info__']['render_engine'] != context.scene.render.engine:
+            self.report({"ERROR"}, "Cannot Continue: Please Switch To '{}' Engine".format(root['__info__']
+                                                                                          ['render_engine']))
             return
 
         # check and see render engine data
-        if root.attrib["Render_Engine"] in ("BLENDER_RENDER", "CYCLES"):
+        if root['__info__']['render_engine'] in ("BLENDER_RENDER", "CYCLES"):
+            context.scene.render.engine = root['__info__']['render_engine']
             mat.use_nodes = True
             nodes = mat.node_tree.nodes
             links = mat.node_tree.links
-            context.scene.render.engine = root.attrib["Render_Engine"]
-        elif root.attrib["Render_Engine"] == "MITSUBA_RENDER" and context.scene.render.engine == "MITSUBA_RENDER":
-            node_group = bpy.data.node_groups.new(name=root.attrib["Node_Group_Name"], type="MitsubaShaderNodeTree")
+        elif root['__info__']['render_engine'] == "MITSUBA_RENDER" and context.scene.render.engine == "MITSUBA_RENDER":
+            node_group = bpy.data.node_groups.new(name=root['__info__']['node_group_name'],
+                                                  type="MitsubaShaderNodeTree")
             nodes = node_group.nodes
             links = node_group.links
             mat.mitsuba_nodes.nodetree = node_group.name
@@ -394,15 +393,15 @@ def import_material(self, context):
             nodes.remove(i)
 
         # import images
-        images = ast.literal_eval(root.attrib["Images"])
+        images = root['__info__']['images']
         image_errors = 0
 
         # don't load image if Render_Engine is MITSUBA_RENDER because it uses absolute file paths
-        if root.attrib["Render_Engine"] != "MITSUBA_RENDER":
+        if root['__info__']['render_engine'] != "MITSUBA_RENDER":
             for image in images:
                 if image[0] not in bpy.data.images:
                     try:
-                        if root.attrib["Path_Type"] == "Relative":
+                        if root['__info__']['path_type'] == "Relative":
                             bpy.data.images.load(folder_path + os_file_sep + image[0])
                         else:
                             bpy.data.images.load(image[1])
@@ -413,104 +412,96 @@ def import_material(self, context):
                 self.report({"ERROR"}, str(image_errors) + " Picture(s) Couldn't Be Loaded")
 
         # add new nodes
-        order = ast.literal_eval(root.attrib["Group_Order"])
+        order = root['__info__']['group_order']
         for group_order in order:
-            group = root.findall(group_order)[0]
+            group = root[group_order]
 
             # set up which node tree to use
-            if group.tag == "main":
+            if group_order == "main":
                 nt = nodes
             else:
-                nt = bpy.data.node_groups.new(group.tag, "ShaderNodeTree")
+                nt = bpy.data.node_groups.new(group_order, "ShaderNodeTree")
 
             is_nodes = True  # nodes or links
-            for data in group:
-                if is_nodes:  # nodes
-                    parents = []
+            parents = []
 
-                    for node in data:
-                        parent = []
+            for node in group['nodes']:
+                parent = []
 
-                        # check if node is custom then make sure it is installed
-                        if node.attrib["bl_idname"] == "GenericNoteNode" and \
-                                ("generic_note" not in bpy.context.user_preferences.addons.keys() and
-                                 "genericnote" not in bpy.context.user_preferences.addons.keys()):
+                # check if node is custom then make sure it is installed
+                if node["bl_idname"] == "GenericNoteNode" and \
+                        ("generic_note" not in bpy.context.user_preferences.addons.keys() and
+                         "genericnote" not in bpy.context.user_preferences.addons.keys()):
 
-                            self.report({"WARNING"}, "Generic Note Node Add-on Not Installed")
-                        else:
-                            # retrieve node name, create node
-                            if group.tag != "main":
-                                temp = nt.nodes.new(node.attrib["bl_idname"])
-                            else:
-                                temp = nt.new(node.attrib["bl_idname"])
-
-                            # node specific is first so that groups are set up first
-                            nos = node.attrib["node_specific"]
-                            if nos:
-                                nod = ast.literal_eval(nos)
-                                for i in range(0, len(nod), 2):  # step by two because name, value, name, value...
-                                    att = nod[i]
-                                    val = nod[i + 1]
-
-                                    # group node inputs and outputs
-                                    if att in ("group_input", "group_output"):
-                                        for sub in range(0, len(val), 2):
-                                            sub_val = [val[sub], val[sub + 1]]
-                                            if att == "group_input":
-                                                nt.inputs.new(sub_val[0], sub_val[1])
-                                            else:
-                                                nt.outputs.new(sub_val[0], sub_val[1])
-                                    elif att == "parent" and val is not None:
-                                        parent.append(val)
-                                    elif val is not None:
-                                        set_attributes(temp, val, att)
-
-                            # inputs
-                            ins = node.attrib["inputs"]
-                            if ins != "":
-                                inp = ast.literal_eval(ins)
-                                for i in range(0, len(inp), 2):
-                                    if inp[i + 1] != "SHADER":
-                                        temp.inputs[inp[i]].default_value = inp[i + 1]
-                            # outputs
-                            ous = node.attrib["outputs"]
-                            if ous != "":
-                                out = ast.literal_eval(ous)
-                                for i in range(0, len(out), 2):
-                                    temp.outputs[out[i]].default_value = out[i + 1]
-
-                            # deal with parent
-                            if parent:
-                                parent += [temp.name, temp.location]
-                                parents.append(parent)
-
-                    # TODO: Fix parent and child location issues
-                    # set parents
-                    for parent in parents:
-                        print(parent)
-                        if group.tag != "main":
-                            nt.nodes[parent[1]].parent = nt.nodes[parent[0]]
-                            nt.nodes[parent[1]].location = parent[2]
-                        else:
-                            nt[parent[1]].parent = nt[parent[0]]
-                            nt[parent[1]].location = parent[2]
-
-                # create links
+                    self.report({"WARNING"}, "Generic Note Node Add-on Not Installed")
                 else:
-                    for link in data:
-                        ld = ast.literal_eval(link.attrib["link_info"])
-                        if group.tag == "main":
-                            o = nt[ld[0]].outputs[ld[1]]
-                            i = nt[ld[2]].inputs[ld[3]]
-                            links.new(o, i)
-                        else:
-                            o = nt.nodes[ld[0]].outputs[ld[1]]
-                            i = nt.nodes[ld[2]].inputs[ld[3]]
-                            nt.links.new(o, i)
+                    # retrieve node name, create node
+                    if group_order != "main":
+                        temp = nt.nodes.new(node["bl_idname"])
+                    else:
+                        temp = nt.new(node["bl_idname"])
+
+                    # node specific is first so that groups are set up first
+                    nos = node["node_specific"]
+                    if nos:
+                        for i in range(0, len(nos), 2):  # step by two because name, value, name, value...
+                            att = nos[i]
+                            val = nos[i + 1]
+
+                            # group node inputs and outputs
+                            if att in ("group_input", "group_output"):
+                                for sub in range(0, len(val), 2):
+                                    sub_val = [val[sub], val[sub + 1]]
+                                    if att == "group_input":
+                                        nt.inputs.new(sub_val[0], sub_val[1])
+                                    else:
+                                        nt.outputs.new(sub_val[0], sub_val[1])
+                            elif att == "parent" and val is not None:
+                                parent.append(val)
+                            elif val is not None:
+                                set_attributes(temp, val, att)
+
+                    # inputs
+                    ins = node["inputs"]
+                    if ins != "":
+                        for i in range(0, len(ins), 2):
+                            if ins[i + 1] != "SHADER":
+                                temp.inputs[ins[i]].default_value = ins[i + 1]
+                    # outputs
+                    outs = node["outputs"]
+                    if outs != "":
+                        for i in range(0, len(outs), 2):
+                            temp.outputs[outs[i]].default_value = outs[i + 1]
+
+                    # deal with parent
+                    if parent:
+                        parent += [temp.name, temp.location]
+                        parents.append(parent)
+
+            # TODO: Fix parent and child location issues
+            # set parents
+            for parent in parents:
+                if group_order != "main":
+                    nt.nodes[parent[1]].parent = nt.nodes[parent[0]]
+                    nt.nodes[parent[1]].location = parent[2]
+                else:
+                    nt[parent[1]].parent = nt[parent[0]]
+                    nt[parent[1]].location = parent[2]
+
+            # links
+            for link in group['links']:
+                if group_order == "main":
+                    o = nt[link[0]].outputs[link[1]]
+                    i = nt[link[2]].inputs[link[3]]
+                    links.new(o, i)
+                else:
+                    o = nt.nodes[link[0]].outputs[link[1]]
+                    i = nt.nodes[link[2]].inputs[link[3]]
+                    nt.links.new(o, i)
 
                 is_nodes = not is_nodes
 
-        if root.attrib["Render_Engine"] != "MITSUBA_RENDER":
+        if root['__info__']['render_engine'] != "MITSUBA_RENDER":
             # get rid of extra groups
             for i in bpy.data.node_groups:
                 if i.users == 0:
