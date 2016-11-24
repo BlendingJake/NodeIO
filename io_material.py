@@ -418,7 +418,7 @@ def import_node_tree(self, context):
             parents = []
 
             for node in group['nodes']:
-                parent = []
+                parent = {}
 
                 # check if node is custom then make sure it is installed
                 if node["bl_idname"] == "GenericNoteNode" and \
@@ -448,8 +448,8 @@ def import_node_tree(self, context):
                                         nt.inputs.new(sub_val[0], sub_val[1])
                                     else:
                                         nt.outputs.new(sub_val[0], sub_val[1])
-                            elif att == "parent" and val is not None:
-                                parent.append(val)
+                            elif att == "parent" and val is not None:  # don't set parent in case not created yet
+                                parent['parent'] = val
                             elif val is not None:
                                 set_attributes(temp, val, att)
 
@@ -467,18 +467,18 @@ def import_node_tree(self, context):
 
                     # deal with parent
                     if parent:
-                        parent += [temp.name, temp.location]
+                        parent['node'] = temp.name
+                        parent['location'] = temp.location
                         parents.append(parent)
 
-            # TODO: Fix parent and child location issues
             # set parents
             for parent in parents:
                 if group_order != "main":
-                    nt.nodes[parent[1]].parent = nt.nodes[parent[0]]
-                    nt.nodes[parent[1]].location = parent[2]
+                    nt.nodes[parent['node']].parent = nt.nodes[parent['parent']]
+                    nt.nodes[parent['node']].location = parent['location'] + nt.nodes[parent['parent']].location
                 else:
-                    nt[parent[1]].parent = nt[parent[0]]
-                    nt[parent[1]].location = parent[2]
+                    nt[parent['node']].parent = nt[parent['parent']]
+                    nt[parent['node']].location = parent['location'] + nt[parent['parent']].location
 
             # links
             for link in group['links']:
