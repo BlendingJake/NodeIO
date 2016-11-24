@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Material IO",
+    "name": "NodeIO",
     "author": "Jacob Morris",
     "version": (2, 0),
     "blender": (2, 78, 0),
     "location": "Properties > Materials",
-    "description": "Allows The Exporting And Importing Of Materials Via .bmat Files",
+    "description": "Allows The Exporting And Importing Of Node Trees Via .bnodes Files",
     "category": "Import-Export"
     }
 
@@ -20,6 +20,9 @@ import zipfile
 import string
 from mathutils import *
 import json
+
+version_number = (2, 0)
+DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
 
 
 def make_tuple(data):
@@ -38,7 +41,7 @@ def serialize(name):  # serialize names
 
 
 def collect_node_data(n: bpy.types.Node):
-    ns, inputs, outputs, images = [], [], [], []
+    ns, inputs, outputs, dependencies = [], [], [], []
     is_group = True if n.type == "GROUP" else False
 
     if n.bl_idname != "NodeReroute":  # Reroute does have in and out, but does not know type until linked
@@ -51,7 +54,7 @@ def collect_node_data(n: bpy.types.Node):
                     inputs.append(make_tuple(data.default_value))
                 elif data.type == "VALUE":
                     inputs.append(j)
-                    inputs.append(data.default_value)
+                    inputs.append(round(data.default_value, 4))
                 elif n.type == "GROUP" and data.type == "SHADER":
                     inputs.append(j)
                     inputs.append("SHADER")
@@ -71,7 +74,7 @@ def collect_node_data(n: bpy.types.Node):
                     outputs.append(make_tuple(data.default_value))
                 elif data.type == "VALUE":
                     outputs.append(j)
-                    outputs.append(data.default_value)
+                    outputs.append(round(data.default_value, 4))
                 elif n.type == "GROUP" and data.type == "SHADER":
                     outputs.append(j)
                     outputs.append("SHADER")
@@ -99,6 +102,7 @@ def collect_node_data(n: bpy.types.Node):
             t = method[1]
             val = eval("n.{}".format(method[0]))  # get value
 
+            # special handling for certain types
             if isinstance(t, (Vector, Color, Euler, Quaternion)):  # TUPLE
                 ns += [method[0], make_tuple(val)]
             elif isinstance(t, bpy.types.CurveMapping):  # CURVES
@@ -123,7 +127,7 @@ def collect_node_data(n: bpy.types.Node):
                 ns += ["node_tree.name", val.name]
             elif isinstance(t, bpy.types.Image) and n.image is not None:  # IMAGE
                 ns += ["image", n.image.name]
-                images.append([n.image.name, n.image.filepath])
+                dependencies.append(['image', n.image.name, n.image.filepath])
             elif isinstance(t, bpy.types.ParticleSystem):  # PARTICLE SYSTEM - needs objects and particle system
                 ns += [method[0], [n.object, val.name]]
             elif isinstance(t, str):  # STRING
@@ -133,22 +137,23 @@ def collect_node_data(n: bpy.types.Node):
             elif isinstance(t, bpy.types.Node):  # FRAME NODE
                 ns += [method[0], serialize(val.name)]
 
-    return [{"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}, is_group, images]
+    return [{"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}, is_group,
+            dependencies]
 
 
 # recursive method that collects all nodes and if group node goes and collects its nodes
 # data is added to data in [[nodes, links], [nodes, links]] group by group
-def collect_nodes(nodes, links, images, names, name, data):
+def collect_nodes(nodes, links, dependencies, names, name, data):
     m_n = []
     m_l = []
     
     for n in nodes:  # nodes
         out, is_group, im = collect_node_data(n)
         m_n.append(out)
-        images.append(im)
+        dependencies.append(im)
         
         if is_group:
-            collect_nodes(n.node_tree.nodes, n.node_tree.links, images, names, n.node_tree.name, data)    
+            collect_nodes(n.node_tree.nodes, n.node_tree.links, dependencies, names, n.node_tree.name, data)
         
     for l in links:  # links
         out = link_info(l)
@@ -190,35 +195,32 @@ def link_info(link):
     return out
 
 
-def export_material(self, context):
-    mat_list = []
-    export_type = context.scene.material_io_export_type
-    export_path = bpy.path.abspath(context.scene.material_io_export_path)
+def export_node_tree(self, context):
+    to_export = []
+    # export_type = context.scene.node_io_export_type
+    export_path = bpy.path.abspath(context.scene.node_io_export_path)
     folder_path = None
     folder_name = None
+    node_tree = context.space_data.node_tree
 
-    # check file paths
+    # check data
     if not export_path:
         self.report({"ERROR"}, "Empty Export Path")
         return
     elif not path.exists(export_path):
         self.report({"ERROR"}, "Export Path '{}' Does Not Exist".format(export_path))
         return
+    elif node_tree is None:
+        self.report({"ERROR"}, "No Active Node Tree")
 
-    # determine what all is being exported and the name of the folder to export to
-    if export_type == "1" and context.material is not None:
-        mat_list.append(context.material.name)
-    elif export_type == "2":
-        folder_name = context.object.name
-        for i in context.object.data.materials:
-            mat_list.append(i.name)
-    elif export_type == "3":
-        folder_name = path.split(bpy.data.filepath)[1]
-        for i in bpy.data.materials:
-            mat_list.append(i.name)
+    # COLLECT NEED INFORMATION: to_export allows multiple node_trees at a time. Info formatted into dict
+    # {"nodes":____, "links":____, "name":____, "bl_idname":_____}
+    if node_tree.bl_idname == "ShaderNodeTree":
+        to_export.append({"nodes": node_tree.nodes, "links": node_tree.links, "name":
+                         context.active_object.active_material.name, "bl_idname": node_tree.bl_idname})
 
-    # create folder if more then 1 material, or if paths are being made relative
-    if len(mat_list) > 1 or context.scene.material_io_image_save_type == "2":
+    # create folder if more then one node_tree, or if paths are being made relative and there might be dependencies
+    if len(to_export) > 1 or context.scene.node_io_dependency_save_type == "2":
         try:
             folder_path = export_path + os_file_sep + folder_name
             mkdir(folder_path)
@@ -229,89 +231,67 @@ def export_material(self, context):
         folder_path = export_path
 
     # export materials
-    for mat_name in mat_list:
-        # check render engine to see where nodes are located at
-        if context.scene.render.engine in ("CYCLES", "BLENDER_RENDER"):
-            mat = bpy.data.materials[mat_name]
-        # mitsuba nodes are in a node group that is linked up to the material
-        elif context.scene.render.engine == "MITSUBA_RENDER":
-            if bpy.data.materials[mat_name].mitsuba_nodes.nodetree in bpy.data.node_groups:
-                mat = bpy.data.node_groups[bpy.data.materials[mat_name].mitsuba_nodes.nodetree]
-            else:
-                mat = None
-        
-        if mat is not None:
-            json_root = {}
-            names = {}
-            data, images = [], []
-            m_links, m_nodes = [], []
+    for node_tree in to_export:
+        json_root = {}
+        names = {}
+        data, dependencies = [], []
+        m_links, m_nodes = node_tree["links"], node_tree["nodes"]
 
-            node_group_name = ""
+        # get node data
+        collect_nodes(m_nodes, m_links, dependencies, names, "main", data)
 
-            # main node and links sources depending on what render engine
-            if context.scene.render.engine in ("CYCLES", "BLENDER_RENDER"):
-                m_links = mat.node_tree.links
-                m_nodes = mat.node_tree.nodes
-            # mitsuba nodes are in a node group that is linked up to the material
-            elif context.scene.render.engine == "MITSUBA_RENDER":
-                m_links = mat.links
-                m_nodes = mat.nodes
-                node_group_name = bpy.data.materials[mat_name].mitsuba_nodes.nodetree
+        # write data
+        # material attribs
+        t = datetime.now()
+        date_string = "{}/{}/{} at {}:{}:{} in {}".format(t.month, t.day, t.year, t.hour, t.minute,
+                                                          t.second, tzname[0])
 
-            # get node data
-            collect_nodes(m_nodes, m_links, images, names, "main", data)
+        node_counter = 0
+        for group in names:
+            json_root[group] = {'nodes': data[names[group]][0], 'links': data[names[group]][1]}
+            node_counter += len(data[names[group]][0])
 
-            # write data
-            # material attribs
-            t = datetime.now()
-            date_string = "{}/{}/{} at {}:{}:{} in {}".format(t.month, t.day, t.year, t.hour, t.minute,
-                                                              t.second, tzname[0])
+        # get order of groups
+        pre_order = sorted(names.items(), key=operator.itemgetter(1))
+        order = [i[0].replace("/", "_") for i in pre_order]
+        json_root['__info__'] = {'number_of_nodes': node_counter, 'group_order': order, "render_engine":
+                                 context.scene.render.engine, "node_tree_name": serialize(node_tree["name"]),
+                                 "date_created": date_string, "version": version_number, "node_tree_type":
+                                     node_tree["bl_idname"]}
 
-            node_counter = 0
-            for group in names:
-                json_root[group] = {'nodes': data[names[group]][0], 'links': data[names[group]][1]}
+        # dependencies
+        depend_out = []  # collect all dependencies to place as attribute of root element so they can be imported first
 
-            # get order of groups
-            pre_order = sorted(names.items(), key=operator.itemgetter(1))
-            order = [i[0].replace("/", "_") for i in pre_order]
-            json_root['__info__'] = {'number_of_nodes': node_counter, 'group_order': order, "render_engine":
-                                     context.scene.render.engine, "material_name": serialize(mat.name),
-                                     "node_group_name": serialize(node_group_name), "date_created": date_string}
+        # absolute filepaths
+        if context.scene.node_io_dependency_save_type == "1":
+            json_root['__info__']['path_type'] = "absolute"
 
-            # images
-            img_out = []  # collect all images to place as attribute of root element so they can be imported first
+            # of format [node, node,...] where each node is [depend, depend,...] and depend is [type, name, path]
+            for node in dependencies:
+                for image in node:
+                    depend_out.append([image[0], image[1], bpy.path.abspath(image[2])])
+        else:  # relative filepaths
+            json_root['__info__']['path_type'] = "relative"
 
-            # absolute filepaths
-            if context.scene.material_io_image_save_type == "1":
-                json_root['__info__']['path_type'] = "absolute"
+            for node in dependencies:
+                for depend in node:
+                    depend_path = bpy.path.abspath(depend[2])
+                    depend_out.append([depend[0], depend[1], os_file_sep + depend[1]])
+                    copyfile(depend_path, folder_path + os_file_sep + depend[1])
 
-                # of format [node, node,...] where each node is [image, image,...] and image is [name, path]
-                for node in images:
-                    for image in node:
-                        img_out.append([image[0], bpy.path.abspath(image[1])])
-            else:  # relative filepaths
-                json_root['__info__']['path_type'] = "relative"
+        json_root['__info__']['dependencies'] = depend_out
+        save_path = folder_path + os_file_sep + node_tree["name"] + ".bnodes"
 
-                for node in images:
-                    for image in node:
-                        image_path = bpy.path.abspath(image[1])
-                        image_name = path.split(image_path)[1]
-                        img_out.append([image[0], os_file_sep + image_name])
-                        copyfile(image_path, folder_path + os_file_sep + image_name)
-
-            json_root['__info__']['images'] = img_out
-            save_path = folder_path + os_file_sep + mat_name + ".bmat"
-
-            try:
-                file = open(save_path, 'w')
-                json.dump(json_root, file)
-                file.close()
-            except (PermissionError, FileNotFoundError):
-                self.report({"ERROR"}, "Permission Denied '{}'".format(save_path))
-                return
+        try:
+            file = open(save_path, 'w')
+            json.dump(json_root, file, indent=4 if DEBUG_FILE else 0)
+            file.close()
+        except (PermissionError, FileNotFoundError):
+            self.report({"ERROR"}, "Permission Denied '{}'".format(save_path))
+            return
 
     # zip folder
-    if folder_path != export_path and context.scene.material_io_is_compress:  # if folder has been created
+    if folder_path != export_path and context.scene.node_io_is_compress:  # if folder has been created
         if path.exists(folder_path + ".zip"):  # if zipped file is already there, delete
             remove_file(folder_path + ".zip")
 
@@ -325,15 +305,15 @@ def export_material(self, context):
         rmtree(folder_path)
 
 
-def import_material(self, context):
+def import_node_tree(self, context):
     import_path = None
-    folder_path = None  # use for getting images if needed
+    folder_path = None  # use for getting dependencies if needed
 
-    if context.scene.material_io_import_type == "1":  # single file
-        import_path = bpy.path.abspath(context.scene.material_io_import_path_file)
+    if context.scene.node_io_import_type == "1":  # single file
+        import_path = bpy.path.abspath(context.scene.node_io_import_path_file)
         folder_path = path.dirname(import_path)
     else:  # all files in folder
-        import_path = bpy.path.abspath(context.scene.material_io_import_path_dir)
+        import_path = bpy.path.abspath(context.scene.node_io_import_path_dir)
         folder_path = import_path
 
     # check file path
@@ -343,73 +323,75 @@ def import_material(self, context):
     elif not path.exists(import_path):
         self.report({"ERROR"}, "Filepath '{}' Does Not Exist".format(import_path))
         return
-    elif context.scene.material_io_import_type == "1" and not import_path.endswith(".bmat"):
-        self.report({"ERROR"}, "Filepath Does Not End With .bmat")
+    elif context.scene.node_io_import_type == "1" and not import_path.endswith(".bnodes"):
+        self.report({"ERROR"}, "Filepath Does Not End With .bnodes")
         return
 
     # collect filepaths
     import_list = []
 
-    if context.scene.material_io_import_type == "2":  # import all files in folder
+    if context.scene.node_io_import_type == "2":  # import all files in folder
         files = listdir(import_path)
 
         for file in files:
-            if file.endswith(".bmat"):
+            if file.endswith(".bnodes"):
                 import_list.append(import_path + os_file_sep + file)
     else:
         import_list.append(import_path)
 
-    # for each .bmat file import and create material
+    # for each .bnodes file import and create material
     for file_path in import_list:
         file = open(file_path, 'r')
         root = json.load(file)
         file.close()
 
-        mat = bpy.data.materials.new(root['__info__']['material_name'])
-        nodes = None
-        links = None
+        node_tree, nodes, links = None, None, None
 
-        # make sure in correct render mode
-        if root['__info__']['render_engine'] != context.scene.render.engine:
-            self.report({"ERROR"}, "Cannot Continue: Please Switch To '{}' Engine".format(root['__info__']
-                                                                                          ['render_engine']))
-            return
+        # determine type
+        if root['__info__']['node_tree_type'] == 'ShaderNodeTree':
+            node_tree = bpy.data.materials.new(root['__info__']['node_tree_name'])
 
-        # check and see render engine data
-        if root['__info__']['render_engine'] in ("BLENDER_RENDER", "CYCLES"):
+            # make sure in correct render mode
+            if root['__info__']['render_engine'] != context.scene.render.engine:
+                self.report({"ERROR"}, "Cannot Continue: Please Switch To '{}' Engine".format(root['__info__']
+                                                                                              ['render_engine']))
+                return
+
             context.scene.render.engine = root['__info__']['render_engine']
-            mat.use_nodes = True
-            nodes = mat.node_tree.nodes
-            links = mat.node_tree.links
-        elif root['__info__']['render_engine'] == "MITSUBA_RENDER" and context.scene.render.engine == "MITSUBA_RENDER":
-            node_group = bpy.data.node_groups.new(name=root['__info__']['node_group_name'],
-                                                  type="MitsubaShaderNodeTree")
-            nodes = node_group.nodes
-            links = node_group.links
-            mat.mitsuba_nodes.nodetree = node_group.name
+            node_tree.use_nodes = True
+            nodes = node_tree.node_tree.nodes
+            links = node_tree.node_tree.links
+
+            # elif root['__info__'][
+            #     'render_engine'] == "MITSUBA_RENDER" and context.scene.render.engine == "MITSUBA_RENDER":
+            #     node_group = bpy.data.node_groups.new(name=root['__info__']['node_tree_name'],
+            #                                           type="MitsubaShaderNodeTree")
+            #     nodes = node_group.nodes
+            #     links = node_group.links
+            #     node_tree.mitsuba_nodes.nodetree = node_group.name
 
         # remove any default nodes
         for i in nodes:
             nodes.remove(i)
 
-        # import images
-        images = root['__info__']['images']
-        image_errors = 0
+        # import dependencies
+        dependencies = root['__info__']['dependencies']
+        depend_errors = 0
 
         # don't load image if Render_Engine is MITSUBA_RENDER because it uses absolute file paths
         if root['__info__']['render_engine'] != "MITSUBA_RENDER":
-            for image in images:
-                if image[0] not in bpy.data.images:
+            for depend in dependencies:
+                if depend[0] == "image" and depend[1] not in bpy.data.images:
                     try:
                         if root['__info__']['path_type'] == "Relative":
-                            bpy.data.images.load(folder_path + os_file_sep + image[0])
+                            bpy.data.images.load(folder_path + os_file_sep + depend[1])
                         else:
-                            bpy.data.images.load(image[1])
+                            bpy.data.images.load(depend[2])
                     except RuntimeError:
-                        image_errors += 1
+                        depend_errors += 1
 
-            if image_errors:
-                self.report({"ERROR"}, str(image_errors) + " Picture(s) Couldn't Be Loaded")
+            if depend_errors:
+                self.report({"ERROR"}, str(depend_errors) + " Dependency(ies) Couldn't Be Loaded")
 
         # add new nodes
         order = root['__info__']['group_order']
@@ -508,8 +490,8 @@ def import_material(self, context):
                     bpy.data.node_groups.remove(i)
 
         # add material to object
-        if context.object is not None and context.scene.material_io_is_auto_add:
-            context.object.data.materials.append(mat)
+        if context.object is not None and context.scene.node_io_is_auto_add:
+            context.object.data.materials.append(node_tree)
 
 
 def s_to_t(s):
@@ -540,13 +522,10 @@ def set_attributes(temp, val, att):
         for el in val:
             e_temp = e.new(el[0])
             e_temp.color = el[1]
-    elif att == "node_tree.name":
+    elif att == "node_tree.name" and val in bpy.data.node_groups:
         temp.node_tree = bpy.data.node_groups[val]
-    elif att == "material":
-        try:
-            temp.material = bpy.data.materials[val]
-        except KeyError:
-            pass
+    elif att == "material" and val in bpy.data.materials:
+        temp.material = bpy.data.materials[val]
     elif att == "mapping":
         # set curves
         temp.mapping.black_level = val[0]
@@ -583,74 +562,72 @@ def set_attributes(temp, val, att):
             exec("temp.{} = {}".format(att, val))
 
 # PROPERTIES
-bpy.types.Scene.material_io_import_export = EnumProperty(name="Import/Export", items=(("1", "Import", ""),
-                                                                                      ("2", "Export", "")))
-bpy.types.Scene.material_io_export_path = StringProperty(name="Export Path", subtype="DIR_PATH")
-bpy.types.Scene.material_io_import_path_file = StringProperty(name="Import Path", subtype="FILE_PATH")
-bpy.types.Scene.material_io_import_path_dir = StringProperty(name="Import Path", subtype="DIR_PATH")
-bpy.types.Scene.material_io_image_save_type = EnumProperty(name="Image Path", items=(("1", "Absolute Paths", ""),
-                                                                                     ("2", "Make Paths Relative", "")),
-                                                           default="1")
-bpy.types.Scene.material_io_is_auto_add = BoolProperty(name="Add Material To Object?", default=True)
-bpy.types.Scene.material_io_export_type = EnumProperty(name="Export Type", items=(("1", "Selected", ""),
-                                                                                  ("2", "Current Object", ""),
-                                                                                  ("3", "All Materials", "")))
-bpy.types.Scene.material_io_import_type = EnumProperty(name="Import Type", items=(("1", "Single", ""),
-                                                                                  ("2", "Multiple", "")))
-bpy.types.Scene.material_io_is_compress = BoolProperty(name="Compress Folder?")
+bpy.types.Scene.node_io_import_export = EnumProperty(name="Import/Export", items=(("1", "Import", ""),
+                                                                                  ("2", "Export", "")))
+bpy.types.Scene.node_io_export_path = StringProperty(name="Export Path", subtype="DIR_PATH")
+bpy.types.Scene.node_io_import_path_file = StringProperty(name="Import Path", subtype="FILE_PATH")
+bpy.types.Scene.node_io_import_path_dir = StringProperty(name="Import Path", subtype="DIR_PATH")
+bpy.types.Scene.node_io_dependency_save_type = EnumProperty(name="Image Path", items=(("1", "Absolute Paths", ""),
+                                                                                      ("2", "Make Paths Relative", "")),
+                                                            default="1")
+bpy.types.Scene.node_io_is_auto_add = BoolProperty(name="Add Node Tree To Object?", default=True)
+# bpy.types.Scene.node_io_export_type = EnumProperty(name="Export Type", items=(("1", "Selected", ""),
+#                                                                               ("2", "Current Object", ""),
+#                                                                               ("3", "All Materials", "")))
+bpy.types.Scene.node_io_import_type = EnumProperty(name="Import Type", items=(("1", "Single", ""),
+                                                                              ("2", "Multiple", "")))
+bpy.types.Scene.node_io_is_compress = BoolProperty(name="Compress Folder?")
 
 
-class MaterialIOPanel(bpy.types.Panel):
-    bl_idname = "OBJECT_PT_material_io_panel"
-    bl_label = "Material IO Panel"
-    bl_space_type = "PROPERTIES"
-    bl_region_type = "WINDOW"
-    bl_category = "material"
-    bl_context = "material"       
+class NodeIOPanel(bpy.types.Panel):
+    bl_idname = "OBJECT_PT_node_io_panel"
+    bl_label = "NodeIO Panel"
+    bl_space_type = "NODE_EDITOR"
+    bl_region_type = "UI"
     
     def draw(self, context):
         layout = self.layout
-        layout.prop(context.scene, "material_io_import_export")
+        layout.prop(context.scene, "node_io_import_export")
         layout.separator()
         
-        if context.scene.material_io_import_export == "2":
-            layout.prop(context.scene, "material_io_export_type")
-            layout.prop(context.scene, "material_io_image_save_type")
-            layout.prop(context.scene, "material_io_is_compress", icon="FILTER")
+        if context.scene.node_io_import_export == "2":
+            # layout.prop(context.scene, "node_io_export_type")
+            layout.prop(context.scene, "node_io_dependency_save_type")
+            layout.prop(context.scene, "node_io_is_compress", icon="FILTER")
             layout.separator()
-            layout.prop(context.scene, "material_io_export_path")
+            layout.prop(context.scene, "node_io_export_path")
             layout.separator()
-            layout.operator("export.material_io_export", icon="ZOOMOUT")
+            layout.operator("export.node_io_export", icon="ZOOMOUT")
                   
         else:
-            layout.prop(context.scene, "material_io_import_type")
-            layout.prop(context.scene, "material_io_is_auto_add", icon="MATERIAL")
+            layout.prop(context.scene, "node_io_import_type")
+            layout.prop(context.scene, "node_io_is_auto_add", icon="NODETREE")
             layout.separator()
 
-            if context.scene.material_io_import_type == "1":
-                layout.prop(context.scene, "material_io_import_path_file")
+            if context.scene.node_io_import_type == "1":
+                layout.prop(context.scene, "node_io_import_path_file")
             else:
-                layout.prop(context.scene, "material_io_import_path_dir")
+                layout.prop(context.scene, "node_io_import_path_dir")
             layout.separator()
 
-            layout.operator("import.material_io_import", icon="ZOOMIN")
+            layout.operator("import.node_io_import", icon="ZOOMIN")
 
 
-class MaterialIOExport(bpy.types.Operator):
-    bl_idname = "export.material_io_export"
-    bl_label = "Export Material"
+class NodeIOExport(bpy.types.Operator):
+    bl_idname = "export.node_io_export"
+    bl_label = "Export Node Tree"
     
     def execute(self, context):
-        export_material(self, context)
+        export_node_tree(self, context)
         return {"FINISHED"}
 
 
-class MaterialIOImport(bpy.types.Operator):
-    bl_idname = "import.material_io_import"
-    bl_label = "Import Material"
+class NodeIOImport(bpy.types.Operator):
+    bl_idname = "import.node_io_import"
+    bl_label = "Import Node Tree"
     
     def execute(self, context):
-        import_material(self, context)
+        import_node_tree(self, context)
         return {"FINISHED"}             
 
 
