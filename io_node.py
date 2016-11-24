@@ -31,14 +31,14 @@ def make_tuple(data):
     return tuple(out)
 
 
-def serialize(name):  # serialize names
-    f = ""
-    for i in name:
-        if i not in string.ascii_letters and i not in string.digits and i != "_":
-            f += "_"
-        else:
-            f += i   
-    return f
+# def serialize(name):  # serialize names
+#     f = ""
+#     for i in name:
+#         if i not in string.ascii_letters and i not in string.digits and i != "_":
+#             f += "_"
+#         else:
+#             f += i
+#     return f
 
 
 def collect_node_data(n: bpy.types.Node):
@@ -46,60 +46,66 @@ def collect_node_data(n: bpy.types.Node):
     is_group = True if n.type == "GROUP" else False
 
     # certain nodes and sockets do not support some operations, like having no .inputs or .outputs, or no .default_value
-    node_exclude_list = ['NodeReroute']
-    # sockets that don't have .default_value
+    node_exclude_list = ['NodeReroute', 'NodeGroupInput', 'NodeGroupOutput']
+    # sockets that don't have .default_value, these are bl_idname's
     socket_exclude_list = ['MtsSocketBsdf', 'MtsSocketSubsurface', 'MtsSocketMedium', 'MtsSocketEmitter',
                            'MtsSocketSpectrum', 'MtsSocketColor', 'MtsSocketUVMapping', 'MtsSocketLamp',
-                           'MtsSocketFloat', 'MtsSocketTexture']
+                           'MtsSocketFloat', 'MtsSocketTexture', 'NodeSocketShader']
+
     # types that can be converted to lists
-    list_types = [Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array]
+    list_types = (Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array)
 
     if n.bl_idname not in node_exclude_list:  # Reroute does have in and out, but does not know type until linked
         # inputs
-        if n.bl_idname != "NodeGroupInput":
-            for j in range(len(n.inputs)):
-                data = n.inputs[j]
-                if data.bl_idname not in socket_exclude_list:
-                    if n.type == "GROUP" and data.type == "SHADER":  # do not have default_value, but still needed
-                        inputs.append(j)
-                        inputs.append("SHADER")
+        for j in range(len(n.inputs)):
+            data = n.inputs[j]
+            if data.bl_idname not in socket_exclude_list:
+                inputs.append(j)
+                # do not have default_value, but still needed to build node
+                if n.bl_idname == "ShaderNodeGroup" and data.type == "SHADER":
+                    inputs.append("SHADER")
+                else:
+                    val = data.default_value
+                    if isinstance(val, list_types):  # list
+                        inputs.append(make_tuple(data.default_value))
+                    elif isinstance(val, (float, int)):
+                        inputs.append(round(data.default_value, ROUND))
+                    elif isinstance(val, str):
+                        inputs.append(val)
                     else:
-                        val = data.default_value
-                        if isinstance(val, list_types):  # list
-                            inputs.append(j)
-                            inputs.append(make_tuple(data.default_value))
-                        elif isinstance(val, (float, int)):
-                            inputs.append(j)
-                            inputs.append(round(data.default_value, ROUND))
-        else:
-            temp = []
-            for i in n.inputs:
-                temp.append(i.bl_idname)
-                temp.append(serialize(i.name))
-            ns += ["group_input", temp]
+                        del inputs[len(inputs) - 1]
 
         # outputs
-        if n.bl_idname != "NodeGroupOutput":
-            for j in range(len(n.outputs)):
-                data = n.outputs[j]
-                if data.bl_idname not in socket_exclude_list:
-                    if n.type == "GROUP" and data.type == "SHADER":  # do not have default_value, but still needed
-                        outputs.append(j)
-                        outputs.append("SHADER")
+        for j in range(len(n.outputs)):
+            data = n.outputs[j]
+            if data.bl_idname not in socket_exclude_list:
+                outputs.append(j)
+                # do not have default_value, but still needed to build node
+                if n.bl_idname == "ShaderNodeGroup" and data.type == "SHADER":
+                    outputs.append("SHADER")
+                else:
+                    val = data.default_value
+                    if isinstance(val, list_types):  # list
+                        outputs.append(make_tuple(data.default_value))
+                    elif isinstance(val, (float, int)):
+                        outputs.append(round(data.default_value, ROUND))
+                    elif isinstance(val, str):
+                        outputs.append(val)
                     else:
-                        val = data.default_value
-                        if isinstance(val, list_types):  # list
-                            outputs.append(j)
-                            outputs.append(make_tuple(data.default_value))
-                        elif isinstance(val, (float, int)):
-                            outputs.append(j)
-                            outputs.append(round(data.default_value, ROUND))
-        else:
-            temp = []
-            for i in n.outputs:
-                temp.append(i.bl_idname)
-                temp.append(serialize(i.name))
-            ns += ["group_output", temp]
+                        del outputs[len(outputs) - 1]
+
+    elif n.bl_idname == "NodeGroupInput":
+        temp = []
+        for i in n.inputs:
+            temp.append(i.bl_idname)
+            temp.append(i.name)
+        ns += ["group_input", temp]
+    elif n.bl_idname == "NodeGroupOutput":
+        temp = []
+        for i in n.outputs:
+            temp.append(i.bl_idname)
+            temp.append(i.name)
+        ns += ["group_output", temp]
 
     # list of default values to ignore for smaller file-size, or because not needed, also if property is read-only
     exclude_list = ['__doc__', '__module__', '__slots__', 'bl_description', 'bl_height_default', 'bl_height_max',
@@ -147,11 +153,11 @@ def collect_node_data(n: bpy.types.Node):
             elif isinstance(t, bpy.types.ParticleSystem):  # PARTICLE SYSTEM - needs objects and particle system
                 ns += [method[0], [n.object, val.name]]
             elif isinstance(t, str):  # STRING
-                ns += [method[0], serialize(val)]
+                ns += [method[0], val]
             elif isinstance(t, (int, float)):  # FlOAT, INTEGER
                 ns += [method[0], round(val, ROUND)]
             elif isinstance(t, bpy.types.Node):  # FRAME NODE
-                ns += [method[0], serialize(val.name)]
+                ns += [method[0], val.name]
 
     return [{"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}, is_group,
             dependencies]
@@ -180,7 +186,7 @@ def collect_nodes(nodes, links, dependencies, names, name, data):
 
 
 def link_info(link):
-    out = [serialize(link.from_node.name)]
+    out = [link.from_node.name]
 
     fr = link.from_socket.path_from_id()
     fr = fr.split(".")
@@ -194,7 +200,7 @@ def link_info(link):
     n2 = fr.index("]")
     ind = int(fr[n1 + 1:n2])
     out.append(ind)
-    out.append(serialize(link.to_node.name))
+    out.append(link.to_node.name)
     fr = link.to_socket.path_from_id()
     fr = fr.split(".")
 
@@ -271,7 +277,7 @@ def export_node_tree(self, context):
         pre_order = sorted(names.items(), key=operator.itemgetter(1))
         order = [i[0].replace("/", "_") for i in pre_order]
         json_root['__info__'] = {'number_of_nodes': node_counter, 'group_order': order, "render_engine":
-                                 context.scene.render.engine, "node_tree_name": serialize(node_tree["name"]),
+                                 context.scene.render.engine, "node_tree_name": node_tree["name"],
                                  "date_created": date_string, "version": version_number, "node_tree_id":
                                      node_tree["bl_idname"]}
 
@@ -286,7 +292,8 @@ def export_node_tree(self, context):
             for node in dependencies:
                 for image in node:
                     depend_out.append([image[0], image[1], bpy.path.abspath(image[2])])
-        else:  # relative filepaths
+        # relative filepaths
+        else:
             json_root['__info__']['path_type'] = "relative"
 
             for node in dependencies:
@@ -298,6 +305,7 @@ def export_node_tree(self, context):
         json_root['__info__']['dependencies'] = depend_out
         save_path = folder_path + os_file_sep + node_tree["name"] + ".bnodes"
 
+        # write file
         try:
             file = open(save_path, 'w')
             json.dump(json_root, file, indent=4 if DEBUG_FILE else 0)
@@ -587,9 +595,6 @@ bpy.types.Scene.node_io_dependency_save_type = EnumProperty(name="Image Path", i
                                                                                       ("2", "Make Paths Relative", "")),
                                                             default="1")
 bpy.types.Scene.node_io_is_auto_add = BoolProperty(name="Add Node Tree To Object?", default=True)
-# bpy.types.Scene.node_io_export_type = EnumProperty(name="Export Type", items=(("1", "Selected", ""),
-#                                                                               ("2", "Current Object", ""),
-#                                                                               ("3", "All Materials", "")))
 bpy.types.Scene.node_io_import_type = EnumProperty(name="Import Type", items=(("1", "Single", ""),
                                                                               ("2", "Multiple", "")))
 bpy.types.Scene.node_io_is_compress = BoolProperty(name="Compress Folder?")
@@ -607,7 +612,6 @@ class NodeIOPanel(bpy.types.Panel):
         layout.separator()
         
         if context.scene.node_io_import_export == "2":
-            # layout.prop(context.scene, "node_io_export_type")
             layout.prop(context.scene, "node_io_dependency_save_type")
             layout.prop(context.scene, "node_io_is_compress", icon="FILTER")
             layout.separator()
