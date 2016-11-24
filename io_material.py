@@ -23,10 +23,11 @@ import json
 
 version_number = (2, 0)
 DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
+ROUND = 4
 
 
 def make_tuple(data):
-    out = [round(i, 4) for i in data]
+    out = [round(i, ROUND) for i in data]
     return tuple(out)
 
 
@@ -62,12 +63,12 @@ def collect_node_data(n: bpy.types.Node):
                         inputs.append("SHADER")
                     else:
                         val = data.default_value
-                        if isinstance(val, (Color, Euler, Quaternion, Vector)):
+                        if isinstance(val, (Color, Euler, Quaternion, Vector, bpy.types.bpy_prop_array)):  # list
                             inputs.append(j)
                             inputs.append(make_tuple(data.default_value))
                         elif isinstance(val, (float, int)):
                             inputs.append(j)
-                            inputs.append(round(data.default_value, 4))
+                            inputs.append(round(data.default_value, ROUND))
         else:
             temp = []
             for i in n.inputs:
@@ -85,12 +86,12 @@ def collect_node_data(n: bpy.types.Node):
                         outputs.append("SHADER")
                     else:
                         val = data.default_value
-                        if isinstance(val, (Color, Euler, Quaternion, Vector)):
+                        if isinstance(val, (Color, Euler, Quaternion, Vector, bpy.types.bpy_prop_array)):  # list
                             outputs.append(j)
                             outputs.append(make_tuple(data.default_value))
                         elif isinstance(val, (float, int)):
                             outputs.append(j)
-                            outputs.append(round(data.default_value, 4))
+                            outputs.append(round(data.default_value, ROUND))
         else:
             temp = []
             for i in n.outputs:
@@ -146,7 +147,7 @@ def collect_node_data(n: bpy.types.Node):
             elif isinstance(t, str):  # STRING
                 ns += [method[0], serialize(val)]
             elif isinstance(t, (int, float)):  # FlOAT, INTEGER
-                ns += [method[0], val]
+                ns += [method[0], round(val, ROUND)]
             elif isinstance(t, bpy.types.Node):  # FRAME NODE
                 ns += [method[0], serialize(val.name)]
 
@@ -455,15 +456,17 @@ def import_node_tree(self, context):
 
                     # inputs
                     ins = node["inputs"]
-                    if ins != "":
+                    if ins:
                         for i in range(0, len(ins), 2):
                             if ins[i + 1] != "SHADER":
                                 temp.inputs[ins[i]].default_value = ins[i + 1]
                     # outputs
                     outs = node["outputs"]
-                    if outs != "":
+                    if outs:
                         for i in range(0, len(outs), 2):
-                            temp.outputs[outs[i]].default_value = outs[i + 1]
+                            if outs[i + 1] != "SHADER":
+                                print(outs[i+1])
+                                temp.outputs[outs[i]].default_value = outs[i + 1]
 
                     # deal with parent
                     if parent:
