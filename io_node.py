@@ -3,7 +3,7 @@ bl_info = {
     "author": "Jacob Morris",
     "version": (2, 0),
     "blender": (2, 78, 0),
-    "location": "Properties > Materials",
+    "location": "Node Editor > Properties (n)",
     "description": "Allows The Exporting And Importing Of Node Trees Via .bnodes Files",
     "category": "Import-Export"
     }
