@@ -31,47 +31,14 @@ def make_tuple(data):
     return tuple(out)
 
 
-# determine field name for node, then collect values from the field for inputs
-def collect_an_list_data(node, ns, size):
-    extensions = ["objectName", "value", "fontName", "category", "groupName", "textBlockName", "sequenceName"]
-    data = {"size": size, "assignedType": node.assignedType}
-    # assignedType is here because the type of the node needs to be known before assigning
-
-    if size:
-        ext = ""
-        vals = []
-        for i in extensions:
-            try:
-                exec("node.inputs[0].{}".format(i))
-                ext = i
-            except AttributeError:
-                pass
-
-        data["field"] = ext
-        if ext:
-            for i in range(size):
-                val = eval("node.inputs[i].{}".format(ext))
-                if isinstance(val, (Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array)):
-                    vals.append(make_tuple(val))
-                else:
-                    vals.append(val)
-
-            if ext == 'category':  # interpolation list also has two booleans, easeIn & easeOut
-                extra = []
-                for i in range(size):
-                    extra.append({"easeIn": node.inputs[i].easeIn, "easeOut": node.inputs[i].easeOut})
-                data['extra'] = extra
-
-        data["values"] = vals
-    ns += ["an_list", data]
-
-
 def collect_node_data(n: bpy.types.Node):
     ns, inputs, outputs, dependencies = [], [], [], []
     is_group = True if n.type == "GROUP" else False
 
     # certain nodes that do not support some operations, like having no .inputs or .outputs,
-    node_exclude_list = ['NodeReroute', 'NodeGroupInput', 'NodeGroupOutput', 'an_CreateListNode']
+    node_exclude_list = ['NodeReroute', 'NodeGroupInput', 'NodeGroupOutput']
+    socket_field_list = ['default_value', "value", "objectName", "fontName", "category", "groupName", "textBlockName",
+                         "sequenceName"]
 
     # types that can be converted to lists
     list_types = (Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array)
@@ -79,48 +46,59 @@ def collect_node_data(n: bpy.types.Node):
     if n.bl_idname not in node_exclude_list:  # Reroute does have in and out, but does not know type until linked
         # inputs
         for j in range(len(n.inputs)):
-            data = n.inputs[j]
-            # do not have default_value, but still needed to build node
-            if n.bl_idname == "ShaderNodeGroup" and data.type == "SHADER":
-                inputs.append(j)
-                inputs.append("SHADER")
-            else:
+            socket = n.inputs[j]
+            field = ""
+            for i in socket_field_list:
                 try:
-                    val = data.default_value
-                    inputs.append(j)
-                    if isinstance(val, list_types):  # list
-                        inputs.append(make_tuple(data.default_value))
-                    elif isinstance(val, (float, int)):
-                        inputs.append(round(data.default_value, ROUND))
-                    elif isinstance(val, str):
-                        inputs.append(val)
-                    else:
-                        del inputs[len(inputs) - 1]
+                    exec("n.inputs[j].{}".format(i))
+                    field = i
                 except AttributeError:
                     pass
+
+            if field:
+                data = {"index": j, "bl_idname": socket.bl_idname}
+                val = eval("socket.{}".format(field))
+                if isinstance(val, list_types):  # list
+                    data["values"] = {field: make_tuple(socket.default_value)}
+                elif isinstance(val, (float, int)):
+                    data["values"] = {field: round(socket.default_value, ROUND)}
+                elif isinstance(val, str):
+                    data["values"] = {field: val}
+
+                # bl_idname specific
+                if socket.bl_idname == "an_InterpolationSocket":
+                    data['values']['easeIn'] = socket.easeIn
+                    data['values']['easeOut'] = socket.easeOut
+
+                inputs.append(data)
 
         # outputs
         for j in range(len(n.outputs)):
-            data = n.outputs[j]
-            # do not have default_value, but still needed to build node
-            if n.bl_idname == "ShaderNodeGroup" and data.type == "SHADER":
-                outputs.append(j)
-                outputs.append("SHADER")
-            else:
+            socket = n.outputs[j]
+            field = ""
+            for i in socket_field_list:
                 try:
-                    val = data.default_value
-                    outputs.append(j)
-                    if isinstance(val, list_types):  # list
-                        outputs.append(make_tuple(data.default_value))
-                    elif isinstance(val, (float, int)):
-                        outputs.append(round(data.default_value, ROUND))
-                    elif isinstance(val, str):
-                        outputs.append(val)
-                    else:
-                        del outputs[len(outputs) - 1]
+                    exec("n.outputs[j].{}".format(i))
+                    field = i
                 except AttributeError:
                     pass
 
+            if field:
+                data = {"index": j, "bl_idname": socket.bl_idname}
+                val = eval("socket.{}".format(field))
+                if isinstance(val, list_types):  # list
+                    data["values"] = {field: make_tuple(socket.default_value)}
+                elif isinstance(val, (float, int)):
+                    data["values"] = {field: round(socket.default_value, ROUND)}
+                elif isinstance(val, str):
+                    data["values"] = {field: val}
+
+                # bl_idname specific
+                if socket.bl_idname == "an_InterpolationSocket":
+                    data['values']['easeIn'] = socket.easeIn
+                    data['values']['easeOut'] = socket.easeOut
+
+                outputs.append(data)
     elif n.bl_idname == "NodeGroupInput":
         temp = []
         for i in n.inputs:
@@ -133,9 +111,10 @@ def collect_node_data(n: bpy.types.Node):
             temp.append(i.bl_idname)
             temp.append(i.name)
         ns += ["group_output", temp]
-    elif n.bl_idname == 'an_CreateListNode':  # have to determine number of inputs
-        num_ins = len(n.inputs) - 1  # last input is "Virtual", only used for adding new input
-        collect_an_list_data(n, ns, num_ins)
+
+    # extra information needed for cearting nodes
+    if n.bl_idname == 'an_CreateListNode':  # have to determine number of inputs
+        ns += ['an_list', {'assignedType': n.assignedType, 'size': len(n.inputs) - 1}]
 
     # list of default values to ignore for smaller file-size, or because not needed, also if property is read-only
     exclude_list = ['__doc__', '__module__', '__slots__', 'bl_description', 'bl_height_default', 'bl_height_max',
@@ -509,18 +488,24 @@ def import_node_tree(self, context):
                                 set_attributes(temp, val, att)
 
                     # inputs
-                    ins = node["inputs"]
-                    if ins:
-                        for i in range(0, len(ins), 2):
-                            if ins[i + 1] != "SHADER":
-                                temp.inputs[ins[i]].default_value = ins[i + 1]
+                    if node['inputs']:
+                        for i in node['inputs']:
+                            for val_key in i['values'].keys():
+                                if isinstance(i['values'][val_key], str):
+                                    exec("temp.inputs[{}].{} = '{}'".format(i['index'], val_key, i['values'][val_key]))
+                                else:
+                                    exec("temp.inputs[{}].{} = {}".format(i['index'], val_key, i['values'][val_key]))
+
                     # outputs
-                    outs = node["outputs"]
-                    if outs:
-                        for i in range(0, len(outs), 2):
-                            if outs[i + 1] != "SHADER":
-                                print(outs[i+1])
-                                temp.outputs[outs[i]].default_value = outs[i + 1]
+                    if node['outputs']:
+                        print(node)
+                        print(temp.bl_idname)
+                        for i in node['outputs']:
+                            for val_key in i['values'].keys():
+                                if isinstance(i['values'][val_key], str):
+                                    exec("temp.outputs[{}].{} = '{}'".format(i['index'], val_key, i['values'][val_key]))
+                                else:
+                                    exec("temp.outputs[{}].{} = {}".format(i['index'], val_key, i['values'][val_key]))
 
                     # deal with parent
                     if parent:
@@ -579,19 +564,6 @@ def set_attributes(temp, val, att):
         temp.removeElementInputs()
         for i in range(val["size"]):
             temp.newInputSocket()
-
-        if val['values']:  # make sure there are values
-            for i in range(val["size"]):
-                if isinstance(val['values'][i], str):
-                    exec("temp.inputs[i].{} = '{}'".format(val['field'], val['values'][i]))
-                else:
-                    exec("temp.inputs[i].{} = {}".format(val['field'], val['values'][i]))
-
-            if val['field'] == 'category':  # interpolation list has easeIn and easeOut
-                for i in range(val['size']):
-                    temp.inputs[i].easeIn = val['extra'][i]['easeIn']
-                    temp.inputs[i].easeOut = val['extra'][i]['easeOut']
-
     elif att == "object" and val in bpy.data.objects:
         temp.object = bpy.data.objects[val]
     elif att == "particle_system" and val[0] in bpy.data.objects \
