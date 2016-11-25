@@ -1,9 +1,9 @@
 bl_info = {
     "name": "NodeIO",
     "author": "Jacob Morris",
-    "version": (2, 0),
+    "version": (0, 1),
     "blender": (2, 78, 0),
-    "location": "Node Editor > Properties (n)",
+    "location": "Node Editor > Properties",
     "description": "Allows The Exporting And Importing Of Node Trees Via .bnodes Files",
     "category": "Import-Export"
     }
@@ -21,7 +21,7 @@ import string
 from mathutils import *
 import json
 
-version_number = (2, 0)
+version_number = (0, 1)
 DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
 ROUND = 4
 
