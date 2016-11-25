@@ -48,17 +48,21 @@ def collect_an_list_data(node, ns, size):
                 pass
 
         data["field"] = ext
-        s = 0
         if ext:
             for i in range(size):
                 val = eval("node.inputs[i].{}".format(ext))
-                s += 1
                 if isinstance(val, (Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array)):
                     vals.append(make_tuple(val))
                 else:
                     vals.append(val)
+
+            if ext == 'category':  # interpolation list also has two booleans, easeIn & easeOut
+                extra = []
+                for i in range(size):
+                    extra.append({"easeIn": node.inputs[i].easeIn, "easeOut": node.inputs[i].easeOut})
+                data['extra'] = extra
+
         data["values"] = vals
-        data['size'] = s  # update size in case there are no values
     ns += ["an_list", data]
 
 
@@ -576,11 +580,18 @@ def set_attributes(temp, val, att):
         for i in range(val["size"]):
             temp.newInputSocket()
 
-        for i in range(val["size"]):
-            if isinstance(val['values'][i], str):
-                exec("temp.inputs[i].{} = '{}'".format(val['field'], val['values'][i]))
-            else:
-                exec("temp.inputs[i].{} = {}".format(val['field'], val['values'][i]))
+        if val['values']:  # make sure there are values
+            for i in range(val["size"]):
+                if isinstance(val['values'][i], str):
+                    exec("temp.inputs[i].{} = '{}'".format(val['field'], val['values'][i]))
+                else:
+                    exec("temp.inputs[i].{} = {}".format(val['field'], val['values'][i]))
+
+            if val['field'] == 'category':  # interpolation list has easeIn and easeOut
+                for i in range(val['size']):
+                    temp.inputs[i].easeIn = val['extra'][i]['easeIn']
+                    temp.inputs[i].easeOut = val['extra'][i]['easeOut']
+
     elif att == "object" and val in bpy.data.objects:
         temp.object = bpy.data.objects[val]
     elif att == "particle_system" and val[0] in bpy.data.objects \
