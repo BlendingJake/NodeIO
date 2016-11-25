@@ -31,12 +31,43 @@ def make_tuple(data):
     return tuple(out)
 
 
+# determine field name for node, then collect values from the field for inputs
+def collect_an_list_data(node, ns, size):
+    extensions = ["objectName", "value", "fontName", "category", "groupName", "textBlockName", "sequenceName"]
+    data = {"size": size, "assignedType": node.assignedType}
+    # assignedType is here because the type of the node needs to be known before assigning
+
+    if size:
+        ext = ""
+        vals = []
+        for i in extensions:
+            try:
+                exec("node.inputs[0].{}".format(i))
+                ext = i
+            except AttributeError:
+                pass
+
+        data["field"] = ext
+        s = 0
+        if ext:
+            for i in range(size):
+                val = eval("node.inputs[i].{}".format(ext))
+                s += 1
+                if isinstance(val, (Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array)):
+                    vals.append(make_tuple(val))
+                else:
+                    vals.append(val)
+        data["values"] = vals
+        data['size'] = s  # update size in case there are no values
+    ns += ["an_list", data]
+
+
 def collect_node_data(n: bpy.types.Node):
     ns, inputs, outputs, dependencies = [], [], [], []
     is_group = True if n.type == "GROUP" else False
 
     # certain nodes that do not support some operations, like having no .inputs or .outputs,
-    node_exclude_list = ['NodeReroute', 'NodeGroupInput', 'NodeGroupOutput']
+    node_exclude_list = ['NodeReroute', 'NodeGroupInput', 'NodeGroupOutput', 'an_CreateListNode']
 
     # types that can be converted to lists
     list_types = (Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array)
@@ -98,6 +129,9 @@ def collect_node_data(n: bpy.types.Node):
             temp.append(i.bl_idname)
             temp.append(i.name)
         ns += ["group_output", temp]
+    elif n.bl_idname == 'an_CreateListNode':  # have to determine number of inputs
+        num_ins = len(n.inputs) - 1  # last input is "Virtual", only used for adding new input
+        collect_an_list_data(n, ns, num_ins)
 
     # list of default values to ignore for smaller file-size, or because not needed, also if property is read-only
     exclude_list = ['__doc__', '__module__', '__slots__', 'bl_description', 'bl_height_default', 'bl_height_max',
@@ -107,7 +141,7 @@ def collect_node_data(n: bpy.types.Node):
                     'poll', 'poll_instance', 'rna_type', 'shading_compatibility', 'show_options', 'show_preview',
                     'show_texture', 'socket_value_update', 'texture_mapping', 'type', 'update', 'viewLocation',
                     'width_hidden', 'bl_idname', 'dimensions', 'isAnimationNode', 'evaluationExpression',
-                    'socketIdentifier', 'dataType', 'canCache', 'iterateThroughLists', 'identifier']
+                    'socketIdentifier', 'dataType', 'canCache', 'iterateThroughLists', 'identifier', 'assignedType']
     exclude = {}  # for checking item membership, dict is faster then list
     for i in exclude_list:
         exclude[i] = i
@@ -536,6 +570,17 @@ def set_attributes(temp, val, att):
     # determine attribute type, exec() can be used if value gets directly set to attribute
     if att == "image" and val in bpy.data.images:
         temp.image = bpy.data.images[val]
+    elif att == 'an_list':  # add correct number of inputs for animation node list
+        temp.assignedType = val['assignedType']
+        temp.removeElementInputs()
+        for i in range(val["size"]):
+            temp.newInputSocket()
+
+        for i in range(val["size"]):
+            if isinstance(val['values'][i], str):
+                exec("temp.inputs[i].{} = '{}'".format(val['field'], val['values'][i]))
+            else:
+                exec("temp.inputs[i].{} = {}".format(val['field'], val['values'][i]))
     elif att == "object" and val in bpy.data.objects:
         temp.object = bpy.data.objects[val]
     elif att == "particle_system" and val[0] in bpy.data.objects \
