@@ -31,26 +31,12 @@ def make_tuple(data):
     return tuple(out)
 
 
-# def serialize(name):  # serialize names
-#     f = ""
-#     for i in name:
-#         if i not in string.ascii_letters and i not in string.digits and i != "_":
-#             f += "_"
-#         else:
-#             f += i
-#     return f
-
-
 def collect_node_data(n: bpy.types.Node):
     ns, inputs, outputs, dependencies = [], [], [], []
     is_group = True if n.type == "GROUP" else False
 
-    # certain nodes and sockets do not support some operations, like having no .inputs or .outputs, or no .default_value
+    # certain nodes that do not support some operations, like having no .inputs or .outputs,
     node_exclude_list = ['NodeReroute', 'NodeGroupInput', 'NodeGroupOutput']
-    # sockets that don't have .default_value, these are bl_idname's
-    socket_exclude_list = ['MtsSocketBsdf', 'MtsSocketSubsurface', 'MtsSocketMedium', 'MtsSocketEmitter',
-                           'MtsSocketSpectrum', 'MtsSocketColor', 'MtsSocketUVMapping', 'MtsSocketLamp',
-                           'MtsSocketFloat', 'MtsSocketTexture', 'NodeSocketShader']
 
     # types that can be converted to lists
     list_types = (Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array)
@@ -59,13 +45,14 @@ def collect_node_data(n: bpy.types.Node):
         # inputs
         for j in range(len(n.inputs)):
             data = n.inputs[j]
-            if data.bl_idname not in socket_exclude_list:
+            # do not have default_value, but still needed to build node
+            if n.bl_idname == "ShaderNodeGroup" and data.type == "SHADER":
                 inputs.append(j)
-                # do not have default_value, but still needed to build node
-                if n.bl_idname == "ShaderNodeGroup" and data.type == "SHADER":
-                    inputs.append("SHADER")
-                else:
+                inputs.append("SHADER")
+            else:
+                try:
                     val = data.default_value
+                    inputs.append(j)
                     if isinstance(val, list_types):  # list
                         inputs.append(make_tuple(data.default_value))
                     elif isinstance(val, (float, int)):
@@ -74,17 +61,20 @@ def collect_node_data(n: bpy.types.Node):
                         inputs.append(val)
                     else:
                         del inputs[len(inputs) - 1]
+                except AttributeError:
+                    pass
 
         # outputs
         for j in range(len(n.outputs)):
             data = n.outputs[j]
-            if data.bl_idname not in socket_exclude_list:
+            # do not have default_value, but still needed to build node
+            if n.bl_idname == "ShaderNodeGroup" and data.type == "SHADER":
                 outputs.append(j)
-                # do not have default_value, but still needed to build node
-                if n.bl_idname == "ShaderNodeGroup" and data.type == "SHADER":
-                    outputs.append("SHADER")
-                else:
+                outputs.append("SHADER")
+            else:
+                try:
                     val = data.default_value
+                    outputs.append(j)
                     if isinstance(val, list_types):  # list
                         outputs.append(make_tuple(data.default_value))
                     elif isinstance(val, (float, int)):
@@ -93,6 +83,8 @@ def collect_node_data(n: bpy.types.Node):
                         outputs.append(val)
                     else:
                         del outputs[len(outputs) - 1]
+                except AttributeError:
+                    pass
 
     elif n.bl_idname == "NodeGroupInput":
         temp = []
@@ -114,7 +106,8 @@ def collect_node_data(n: bpy.types.Node):
                     'inputs', 'internal_links', 'is_registered_node_type', 'bl_label', 'output_template', 'outputs',
                     'poll', 'poll_instance', 'rna_type', 'shading_compatibility', 'show_options', 'show_preview',
                     'show_texture', 'socket_value_update', 'texture_mapping', 'type', 'update', 'viewLocation',
-                    'width_hidden', 'bl_idname', 'dimensions', 'isAnimationNode']
+                    'width_hidden', 'bl_idname', 'dimensions', 'isAnimationNode', 'evaluationExpression',
+                    'socketIdentifier', 'dataType', 'canCache', 'iterateThroughLists', 'identifier']
     exclude = {}  # for checking item membership, dict is faster then list
     for i in exclude_list:
         exclude[i] = i
@@ -127,12 +120,16 @@ def collect_node_data(n: bpy.types.Node):
             # special handling for certain types
             if isinstance(t, (Vector, Color, Euler, Quaternion)):  # TUPLE
                 ns += [method[0], make_tuple(val)]
-            elif isinstance(t, bpy.types.CurveMapping):  # CURVES
-                curves = [make_tuple(n.mapping.black_level), make_tuple(n.mapping.white_level),
-                          str(n.mapping.clip_max_x), str(n.mapping.clip_max_y), str(n.mapping.clip_min_x),
-                          str(n.mapping.clip_min_y), str(n.mapping.use_clip)]
+            elif isinstance(t, (bpy.types.CurveMapping, bpy.types.ShaderNodeRGBCurve)):  # CURVES
+                if isinstance(t, bpy.types.CurveMapping):
+                    c = n
+                else:  # happens with n_InterpolationFromCurveMappingNode, has ShaderNodeRGBCurve which has curve
+                    c = n.curveNode
+                curves = [make_tuple(c.mapping.black_level), make_tuple(c.mapping.white_level),
+                          str(c.mapping.clip_max_x), str(c.mapping.clip_max_y), str(c.mapping.clip_min_x),
+                          str(c.mapping.clip_min_y), str(c.mapping.use_clip)]
 
-                for curve in n.mapping.curves:
+                for curve in c.mapping.curves:
                     points = [curve.extend]
                     for point in curve.points:
                         points.append([make_tuple(point.location), point.handle_type])
@@ -240,6 +237,9 @@ def export_node_tree(self, context):
     if node_tree.bl_idname in ("ShaderNodeTree", "MitsubaShaderNodeTree"):
         to_export.append({"nodes": node_tree.nodes, "links": node_tree.links, "name":
                          context.active_object.active_material.name, "bl_idname": node_tree.bl_idname})
+    elif node_tree.bl_idname == "an_AnimationNodeTree":
+        to_export.append({"nodes": node_tree.nodes, "links": node_tree.links, "name": node_tree.name,
+                          "bl_idname": node_tree.bl_idname})
 
     # create folder if more then one node_tree, or if paths are being made relative and there might be dependencies
     if len(to_export) > 1 or context.scene.node_io_dependency_save_type == "2":
@@ -393,6 +393,12 @@ def import_node_tree(self, context):
             links = mitsuba_tree.links
             node_tree.mitsuba_nodes.nodetree = mitsuba_tree.name
 
+        elif root['__info__']['node_tree_id'] == "an_AnimationNodeTree":
+            node_tree = bpy.data.node_groups.new(name=root['__info__']['node_tree_name'],
+                                                 type="an_AnimationNodeTree")
+            nodes = node_tree.nodes
+            links = node_tree.links
+
         # remove any default nodes
         for i in nodes:
             nodes.remove(i)
@@ -506,7 +512,7 @@ def import_node_tree(self, context):
 
                 is_nodes = not is_nodes
 
-        if root['__info__']['node_tree_id'] != "MitsubaShaderNodeTree":
+        if root['__info__']['node_tree_id'] not in ("MitsubaShaderNodeTree", "an_AnimationNodeTree"):
             # get rid of extra groups
             for i in bpy.data.node_groups:
                 if i.users == 0:
@@ -551,14 +557,18 @@ def set_attributes(temp, val, att):
     elif att == "material" and val in bpy.data.materials:
         temp.material = bpy.data.materials[val]
     elif att == "mapping":
+        if temp.bl_idname == "an_InterpolationFromCurveMappingNode":  # contains ShaderNodeRGBCurve, which has curve
+            node = temp.curveNode
+        else:
+            node = temp
         # set curves
-        temp.mapping.black_level = val[0]
-        temp.mapping.white_level = val[1]
-        temp.mapping.clip_max_x = float(val[2])
-        temp.mapping.clip_max_y = float(val[3])
-        temp.mapping.clip_min_x = float(val[4])
-        temp.mapping.clip_min_y = float(val[5])
-        temp.mapping.use_clip = True if val[6] == "True" else False
+        node.mapping.black_level = val[0]
+        node.mapping.white_level = val[1]
+        node.mapping.clip_max_x = float(val[2])
+        node.mapping.clip_max_y = float(val[3])
+        node.mapping.clip_min_x = float(val[4])
+        node.mapping.clip_min_y = float(val[5])
+        node.mapping.use_clip = True if val[6] == "True" else False
 
         for i in range(7):
             del val[0]
@@ -567,7 +577,7 @@ def set_attributes(temp, val, att):
         counter = 0
         for i in val:
             # set first two points
-            curves = temp.mapping.curves
+            curves = node.mapping.curves
             curves[counter].extend = i[0]
             del i[0]
             curves[counter].points[0].location = i[0][0]
@@ -576,7 +586,7 @@ def set_attributes(temp, val, att):
             curves[counter].points[1].handle_type = i[1][1]
             del i[0:2]
             for i2 in i:
-                temp_point = temp.mapping.curves[counter].points.new(i2[0][0], i2[0][1])
+                temp_point = node.mapping.curves[counter].points.new(i2[0][0], i2[0][1])
                 temp_point.handle_type = i2[1]
             counter += 1
     else:
