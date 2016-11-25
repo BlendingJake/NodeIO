@@ -26,9 +26,14 @@ DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-siz
 ROUND = 4
 
 
-def make_tuple(data):
-    out = [round(i, ROUND) for i in data]
-    return tuple(out)
+def make_list(data):
+    out = []
+    for i in data:
+        if isinstance(i, (bool, str)):
+            out.append(i)
+        else:  # int, float
+            out.append(round(i, ROUND))
+    return out
 
 
 def collect_node_data(n: bpy.types.Node):
@@ -59,11 +64,11 @@ def collect_node_data(n: bpy.types.Node):
                 data = {"index": j, "bl_idname": socket.bl_idname}
                 val = eval("socket.{}".format(field))
                 if isinstance(val, list_types):  # list
-                    data["values"] = {field: make_tuple(socket.default_value)}
-                elif isinstance(val, (float, int)):
-                    data["values"] = {field: round(socket.default_value, ROUND)}
-                elif isinstance(val, str):
+                    data["values"] = {field: make_list(val)}
+                elif isinstance(val, (str, bool)):
                     data["values"] = {field: val}
+                elif isinstance(val, (float, int)):
+                    data["values"] = {field: round(val, ROUND)}
 
                 # bl_idname specific
                 if socket.bl_idname == "an_InterpolationSocket":
@@ -87,11 +92,11 @@ def collect_node_data(n: bpy.types.Node):
                 data = {"index": j, "bl_idname": socket.bl_idname}
                 val = eval("socket.{}".format(field))
                 if isinstance(val, list_types):  # list
-                    data["values"] = {field: make_tuple(socket.default_value)}
-                elif isinstance(val, (float, int)):
-                    data["values"] = {field: round(socket.default_value, ROUND)}
-                elif isinstance(val, str):
+                    data["values"] = {field: make_list(val)}
+                elif isinstance(val, (str, bool)):
                     data["values"] = {field: val}
+                elif isinstance(val, (float, int)):
+                    data["values"] = {field: round(val, ROUND)}
 
                 # bl_idname specific
                 if socket.bl_idname == "an_InterpolationSocket":
@@ -112,10 +117,6 @@ def collect_node_data(n: bpy.types.Node):
             temp.append(i.name)
         ns += ["group_output", temp]
 
-    # extra information needed for cearting nodes
-    if n.bl_idname == 'an_CreateListNode':  # have to determine number of inputs
-        ns += ['an_list', {'assignedType': n.assignedType, 'size': len(n.inputs) - 1}]
-
     # list of default values to ignore for smaller file-size, or because not needed, also if property is read-only
     exclude_list = ['__doc__', '__module__', '__slots__', 'bl_description', 'bl_height_default', 'bl_height_max',
                     'bl_height_min', 'bl_icon', 'bl_rna', 'bl_static_type', 'bl_width_default', 'bl_width_min',
@@ -124,7 +125,7 @@ def collect_node_data(n: bpy.types.Node):
                     'poll', 'poll_instance', 'rna_type', 'shading_compatibility', 'show_options', 'show_preview',
                     'show_texture', 'socket_value_update', 'texture_mapping', 'type', 'update', 'viewLocation',
                     'width_hidden', 'bl_idname', 'dimensions', 'isAnimationNode', 'evaluationExpression',
-                    'socketIdentifier', 'dataType', 'canCache', 'iterateThroughLists', 'identifier', 'assignedType']
+                    'socketIdentifier', 'canCache', 'iterateThroughLists', 'identifier']
     exclude = {}  # for checking item membership, dict is faster then list
     for i in exclude_list:
         exclude[i] = i
@@ -135,27 +136,27 @@ def collect_node_data(n: bpy.types.Node):
             val = eval("n.{}".format(method[0]))  # get value
 
             # special handling for certain types
-            if isinstance(t, (Vector, Color, Euler, Quaternion)):  # TUPLE
-                ns += [method[0], make_tuple(val)]
+            if isinstance(t, list_types):  # TUPLE
+                ns += [method[0], make_list(val)]
             elif isinstance(t, (bpy.types.CurveMapping, bpy.types.ShaderNodeRGBCurve)):  # CURVES
                 if isinstance(t, bpy.types.CurveMapping):
                     c = n
                 else:  # happens with n_InterpolationFromCurveMappingNode, has ShaderNodeRGBCurve which has curve
                     c = n.curveNode
-                curves = [make_tuple(c.mapping.black_level), make_tuple(c.mapping.white_level),
+                curves = [make_list(c.mapping.black_level), make_list(c.mapping.white_level),
                           str(c.mapping.clip_max_x), str(c.mapping.clip_max_y), str(c.mapping.clip_min_x),
                           str(c.mapping.clip_min_y), str(c.mapping.use_clip)]
 
                 for curve in c.mapping.curves:
                     points = [curve.extend]
                     for point in curve.points:
-                        points.append([make_tuple(point.location), point.handle_type])
+                        points.append([make_list(point.location), point.handle_type])
                     curves.append(points)
                 ns += ["mapping", curves]
             elif isinstance(t, bpy.types.ColorRamp):  # COLOR RAMP
                 els = []
                 for j in n.color_ramp.elements:
-                    cur_el = [j.position, make_tuple(j.color)]
+                    cur_el = [j.position, make_list(j.color)]
                     els.append(cur_el)
                 ns += ["color_ramp.color_mode", n.color_ramp.color_mode, "color_ramp.interpolation",
                        n.color_ramp.interpolation, "color_ramp.elements", els]
@@ -166,12 +167,16 @@ def collect_node_data(n: bpy.types.Node):
                 dependencies.append(['image', n.image.name, n.image.filepath])
             elif isinstance(t, bpy.types.ParticleSystem):  # PARTICLE SYSTEM - needs objects and particle system
                 ns += [method[0], [n.object, val.name]]
-            elif isinstance(t, str):  # STRING
+            elif isinstance(t, (str, bool)):  # STRING
                 ns += [method[0], val]
             elif isinstance(t, (int, float)):  # FlOAT, INTEGER
                 ns += [method[0], round(val, ROUND)]
             elif isinstance(t, bpy.types.Node):  # FRAME NODE
                 ns += [method[0], val.name]
+
+    # extra information needed for creating nodes
+    if n.bl_idname == 'an_CreateListNode':  # have to determine number of inputs, has to be evaluated after assignedType
+        ns += ['an_list_size', len(n.inputs) - 1]
 
     return [{"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}, is_group,
             dependencies]
@@ -485,7 +490,7 @@ def import_node_tree(self, context):
                             elif att == "parent" and val is not None:  # don't set parent in case not created yet
                                 parent['parent'] = val
                             elif val is not None:
-                                set_attributes(temp, val, att)
+                                set_attributes(self, temp, val, att)
 
                     # inputs
                     if node['inputs']:
@@ -498,8 +503,6 @@ def import_node_tree(self, context):
 
                     # outputs
                     if node['outputs']:
-                        print(node)
-                        print(temp.bl_idname)
                         for i in node['outputs']:
                             for val_key in i['values'].keys():
                                 if isinstance(i['values'][val_key], str):
@@ -555,14 +558,13 @@ def s_to_t(s):
     return [float(i) for i in tu]
 
 
-def set_attributes(temp, val, att):
+def set_attributes(self, temp, val, att):
     # determine attribute type, exec() can be used if value gets directly set to attribute
     if att == "image" and val in bpy.data.images:
         temp.image = bpy.data.images[val]
-    elif att == 'an_list':  # add correct number of inputs for animation node list
-        temp.assignedType = val['assignedType']
+    elif att == 'an_list_size':  # add correct number of inputs for animation node list
         temp.removeElementInputs()
-        for i in range(val["size"]):
+        for i in range(val):
             temp.newInputSocket()
     elif att == "object" and val in bpy.data.objects:
         temp.object = bpy.data.objects[val]
@@ -618,10 +620,14 @@ def set_attributes(temp, val, att):
                 temp_point.handle_type = i2[1]
             counter += 1
     else:
-        if isinstance(val, str):
-            exec("temp.{} = '{}'".format(att, val))
-        else:
-            exec("temp.{} = {}".format(att, val))
+        try:
+            if isinstance(val, str):
+                exec("temp.{} = '{}'".format(att, val))
+            else:
+                exec("temp.{} = {}".format(att, val))
+        except AttributeError:
+            self.report({"WARNING"}, "NodeIO: Attribute Error, Name={}, ID={}, Attribute={}, Value={}".
+                        format(temp.name, temp.bl_idname, att, val))
 
 # PROPERTIES
 bpy.types.Scene.node_io_import_export = EnumProperty(name="Import/Export", items=(("1", "Import", ""),
