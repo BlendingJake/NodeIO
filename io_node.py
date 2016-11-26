@@ -30,7 +30,6 @@ from inspect import getmembers
 from os import path, mkdir, listdir, walk, remove as remove_file, sep as os_file_sep
 from shutil import copyfile, rmtree
 import zipfile
-import string
 from mathutils import *
 import json
 
@@ -56,7 +55,7 @@ def collect_node_data(n: bpy.types.Node):
     # certain nodes that do not support some operations, like having no .inputs or .outputs,
     node_exclude_list = ['NodeReroute', 'NodeGroupInput', 'NodeGroupOutput']
     socket_field_list = ['default_value', "value", "objectName", "fontName", "category", "groupName", "textBlockName",
-                         "sequenceName"]
+                         "sequenceName", 'isUsed', 'easeIn', 'easeOut']
 
     # types that can be converted to lists
     list_types = (Color, Vector, Euler, Quaternion, bpy.types.bpy_prop_array)
@@ -65,57 +64,39 @@ def collect_node_data(n: bpy.types.Node):
         # inputs
         for j in range(len(n.inputs)):
             socket = n.inputs[j]
-            field = ""
+            data = {"index": j, "bl_idname": socket.bl_idname, 'values': {}}
             for i in socket_field_list:
                 try:
-                    exec("n.inputs[j].{}".format(i))
-                    field = i
+                    val = eval("socket.{}".format(i))
+                    if isinstance(val, list_types):  # list
+                        data["values"][i] = make_list(val)
+                    elif isinstance(val, (str, bool)):
+                        data["values"][i] = val
+                    elif isinstance(val, (float, int)):
+                        data["values"][i] = round(val, ROUND)
                 except AttributeError:
                     pass
 
-            if field:
-                data = {"index": j, "bl_idname": socket.bl_idname}
-                val = eval("socket.{}".format(field))
-                if isinstance(val, list_types):  # list
-                    data["values"] = {field: make_list(val)}
-                elif isinstance(val, (str, bool)):
-                    data["values"] = {field: val}
-                elif isinstance(val, (float, int)):
-                    data["values"] = {field: round(val, ROUND)}
-
-                # bl_idname specific
-                if socket.bl_idname == "an_InterpolationSocket":
-                    data['values']['easeIn'] = socket.easeIn
-                    data['values']['easeOut'] = socket.easeOut
-
+            if data['values']:
                 inputs.append(data)
 
         # outputs
         for j in range(len(n.outputs)):
             socket = n.outputs[j]
-            field = ""
+            data = {"index": j, "bl_idname": socket.bl_idname, 'values': {}}
             for i in socket_field_list:
                 try:
-                    exec("n.outputs[j].{}".format(i))
-                    field = i
+                    val = eval("socket.{}".format(i))
+                    if isinstance(val, list_types):  # list
+                        data["values"][i] = make_list(val)
+                    elif isinstance(val, (str, bool)):
+                        data["values"][i] = val
+                    elif isinstance(val, (float, int)):
+                        data["values"][i] = round(val, ROUND)
                 except AttributeError:
                     pass
 
-            if field:
-                data = {"index": j, "bl_idname": socket.bl_idname}
-                val = eval("socket.{}".format(field))
-                if isinstance(val, list_types):  # list
-                    data["values"] = {field: make_list(val)}
-                elif isinstance(val, (str, bool)):
-                    data["values"] = {field: val}
-                elif isinstance(val, (float, int)):
-                    data["values"] = {field: round(val, ROUND)}
-
-                # bl_idname specific
-                if socket.bl_idname == "an_InterpolationSocket":
-                    data['values']['easeIn'] = socket.easeIn
-                    data['values']['easeOut'] = socket.easeOut
-
+            if data['values']:
                 outputs.append(data)
     elif n.bl_idname == "NodeGroupInput":
         temp = []
