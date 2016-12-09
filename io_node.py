@@ -544,11 +544,9 @@ def import_node_tree(self, context):
 
                 is_nodes = not is_nodes
 
-        if root['__info__']['node_tree_id'] not in ("MitsubaShaderNodeTree", "an_AnimationNodeTree"):
-            # get rid of extra groups
-            for i in bpy.data.node_groups:
-                if i.users == 0:
-                    bpy.data.node_groups.remove(i)
+        for i in bpy.data.node_groups:
+            if i.users == 0:
+                bpy.data.node_groups.remove(i)
 
         # add material to object
         if context.object is not None and context.scene.node_io_is_auto_add and root['__info__']['node_tree_id'] in \
