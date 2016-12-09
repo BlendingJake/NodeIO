@@ -1,7 +1,7 @@
 bl_info = {
     "name": "NodeIO",
     "author": "Jacob Morris",
-    "version": (0, 1),
+    "version": (0, 2),
     "blender": (2, 78, 0),
     "location": "Node Editor > Properties",
     "description": "Allows The Exporting And Importing Of Node Trees Via .bnodes Files",
@@ -33,7 +33,7 @@ import zipfile
 from mathutils import *
 import json
 
-version_number = (0, 1)
+VERSION = (0, 2)
 DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
 ROUND = 4
 
@@ -112,65 +112,70 @@ def collect_node_data(n: bpy.types.Node):
         ns += ["group_output", temp]
 
     # list of default values to ignore for smaller file-size, or because not needed, also if property is read-only
-    exclude_list = ['__doc__', '__module__', '__slots__', 'bl_description', 'bl_height_default', 'bl_height_max',
-                    'bl_height_min', 'bl_icon', 'bl_rna', 'bl_static_type', 'bl_width_default', 'bl_width_min',
-                    'bl_width_max', 'color_mapping', 'draw_buttons', 'draw_buttons_ext', 'image_user', 'input_template',
-                    'inputs', 'internal_links', 'is_registered_node_type', 'bl_label', 'output_template', 'outputs',
-                    'poll', 'poll_instance', 'rna_type', 'shading_compatibility', 'show_options', 'show_preview',
-                    'show_texture', 'socket_value_update', 'texture_mapping', 'type', 'update', 'viewLocation',
-                    'width_hidden', 'bl_idname', 'dimensions', 'isAnimationNode', 'evaluationExpression',
-                    'socketIdentifier', 'canCache', 'iterateThroughLists', 'identifier']
-    exclude = {}  # for checking item membership, dict is faster then list
-    for i in exclude_list:
-        exclude[i] = i
+    exclude_attributes = {'__doc__', '__module__', '__slots__', 'bl_description', 'bl_height_default', 'bl_height_max',
+                          'bl_height_min', 'bl_icon', 'bl_rna', 'bl_static_type', 'bl_width_default', 'bl_width_min',
+                          'bl_width_max', 'color_mapping', 'draw_buttons', 'draw_buttons_ext', 'image_user',
+                          'input_template', 'inputs', 'internal_links', 'is_registered_node_type', 'bl_label',
+                          'output_template', 'outputs', 'poll', 'poll_instance', 'rna_type', 'shading_compatibility',
+                          'show_options', 'show_preview', 'show_texture', 'socket_value_update', 'texture_mapping',
+                          'type', 'update', 'viewLocation', 'width_hidden', 'bl_idname', 'dimensions',
+                          'isAnimationNode', 'evaluationExpression', 'socketIdentifier', 'canCache',
+                          'iterateThroughLists', 'identifier', 'scale_off', 'orient_axis', 'generic_enum', 'objects',
+                          'particles', 'uv'}
 
-    for method in getmembers(n):
-        if method[0] not in exclude:
-            t = method[1]
-            val = eval("n.{}".format(method[0]))  # get value
+    exclude_nodes = {'SvGetPropNode', "SvSetPropNode"}
 
-            # special handling for certain types
-            if isinstance(t, list_types):  # TUPLE
-                ns += [method[0], make_list(val)]
-            elif isinstance(t, (bpy.types.CurveMapping, bpy.types.ShaderNodeRGBCurve)):  # CURVES
-                if isinstance(t, bpy.types.CurveMapping):
-                    c = n
-                else:  # happens with n_InterpolationFromCurveMappingNode, has ShaderNodeRGBCurve which has curve
-                    c = n.curveNode
-                curves = [make_list(c.mapping.black_level), make_list(c.mapping.white_level),
-                          str(c.mapping.clip_max_x), str(c.mapping.clip_max_y), str(c.mapping.clip_min_x),
-                          str(c.mapping.clip_min_y), str(c.mapping.use_clip)]
+    if n.bl_idname not in exclude_nodes:
+        for method in getmembers(n):
+            if method[0] not in exclude_attributes:
+                t = method[1]
+                val = eval("n.{}".format(method[0]))  # get value
 
-                for curve in c.mapping.curves:
-                    points = [curve.extend]
-                    for point in curve.points:
-                        points.append([make_list(point.location), point.handle_type])
-                    curves.append(points)
-                ns += ["mapping", curves]
-            elif isinstance(t, bpy.types.ColorRamp):  # COLOR RAMP
-                els = []
-                for j in n.color_ramp.elements:
-                    cur_el = [j.position, make_list(j.color)]
-                    els.append(cur_el)
-                ns += ["color_ramp.color_mode", n.color_ramp.color_mode, "color_ramp.interpolation",
-                       n.color_ramp.interpolation, "color_ramp.elements", els]
-            elif isinstance(t, bpy.types.NodeTree):  # NODE TREE
-                ns += ["node_tree.name", val.name]
-            elif isinstance(t, bpy.types.Image) and n.image is not None:  # IMAGE
-                ns += ["image", n.image.name]
-                dependencies.append(['image', n.image.name, n.image.filepath])
-            elif isinstance(t, bpy.types.ParticleSystem):  # PARTICLE SYSTEM - needs objects and particle system
-                ns += [method[0], [n.object, val.name]]
-            elif isinstance(t, (str, bool)):  # STRING
-                ns += [method[0], val]
-            elif isinstance(t, (int, float)):  # FlOAT, INTEGER
-                ns += [method[0], round(val, ROUND)]
-            elif isinstance(t, bpy.types.Node):  # FRAME NODE
-                ns += [method[0], val.name]
+                # special handling for certain types
+                if isinstance(t, list_types):  # TUPLE
+                    ns += [method[0], make_list(val)]
+                elif isinstance(t, (bpy.types.CurveMapping, bpy.types.ShaderNodeRGBCurve)):  # CURVES
+                    if isinstance(t, bpy.types.CurveMapping):
+                        c = n
+                    else:  # happens with n_InterpolationFromCurveMappingNode, has ShaderNodeRGBCurve which has curve
+                        c = n.curveNode
+                    curves = [make_list(c.mapping.black_level), make_list(c.mapping.white_level),
+                              str(c.mapping.clip_max_x), str(c.mapping.clip_max_y), str(c.mapping.clip_min_x),
+                              str(c.mapping.clip_min_y), str(c.mapping.use_clip)]
+
+                    for curve in c.mapping.curves:
+                        points = [curve.extend]
+                        for point in curve.points:
+                            points.append([make_list(point.location), point.handle_type])
+                        curves.append(points)
+                    ns += ["mapping", curves]
+                elif isinstance(t, bpy.types.ColorRamp):  # COLOR RAMP
+                    els = []
+                    for j in n.color_ramp.elements:
+                        cur_el = [j.position, make_list(j.color)]
+                        els.append(cur_el)
+                    ns += ["color_ramp.color_mode", n.color_ramp.color_mode, "color_ramp.interpolation",
+                           n.color_ramp.interpolation, "color_ramp.elements", els]
+                elif isinstance(t, bpy.types.NodeTree):  # NODE TREE
+                    ns += ["node_tree.name", val.name]
+                elif isinstance(t, bpy.types.Image) and n.image is not None:  # IMAGE
+                    ns += ["image", n.image.name]
+                    dependencies.append(['image', n.image.name, n.image.filepath])
+                elif isinstance(t, bpy.types.ParticleSystem):  # PARTICLE SYSTEM - needs objects and particle system
+                    ns += [method[0], [n.object, val.name]]
+                elif isinstance(t, (str, bool)):  # STRING
+                    ns += [method[0], val]
+                elif isinstance(t, (int, float)):  # FlOAT, INTEGER
+                    ns += [method[0], round(val, ROUND)]
+                elif isinstance(t, bpy.types.Node):  # FRAME NODE
+                    ns += [method[0], val.name]
 
     # extra information needed for creating nodes
     if n.bl_idname == 'an_CreateListNode':  # have to determine number of inputs, has to be evaluated after assignedType
         ns += ['an_list_size', len(n.inputs) - 1]
+    elif n.bl_idname in ('SvGetPropNode', 'SvSetPropNode'):
+        ns += ['prop_name', n.prop_name, 'location', make_list(n.location), 'name', n.name, 'color', make_list(n.color),
+               'hide', n.hide]
 
     return [{"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}, is_group,
             dependencies]
@@ -253,7 +258,7 @@ def export_node_tree(self, context):
     if node_tree.bl_idname in ("ShaderNodeTree", "MitsubaShaderNodeTree"):
         to_export.append({"nodes": node_tree.nodes, "links": node_tree.links, "name":
                          context.active_object.active_material.name, "bl_idname": node_tree.bl_idname})
-    elif node_tree.bl_idname == "an_AnimationNodeTree":
+    elif node_tree.bl_idname in ("an_AnimationNodeTree", "SverchCustomTreeType"):
         to_export.append({"nodes": node_tree.nodes, "links": node_tree.links, "name": node_tree.name,
                           "bl_idname": node_tree.bl_idname})
 
@@ -294,7 +299,7 @@ def export_node_tree(self, context):
         order = [i[0].replace("/", "_") for i in pre_order]
         json_root['__info__'] = {'number_of_nodes': node_counter, 'group_order': order, "render_engine":
                                  context.scene.render.engine, "node_tree_name": node_tree["name"],
-                                 "date_created": date_string, "version": version_number, "node_tree_id":
+                                 "date_created": date_string, "version": VERSION, "node_tree_id":
                                      node_tree["bl_idname"]}
 
         # dependencies
@@ -389,29 +394,36 @@ def import_node_tree(self, context):
 
         # determine type
         if root['__info__']['node_tree_id'] == 'ShaderNodeTree':
-            node_tree = bpy.data.materials.new(root['__info__']['node_tree_name'])
-
             # make sure in correct render mode
             if root['__info__']['render_engine'] != context.scene.render.engine:
-                self.report({"ERROR"}, "Cannot Continue: Please Switch To '{}' Engine".format(root['__info__']
-                                                                                              ['render_engine']))
+                self.report({"ERROR"}, "NodeIO: Please Switch To '{}' Engine".format(root['__info__']
+                                                                                     ['render_engine']))
                 return
 
+            node_tree = bpy.data.materials.new(root['__info__']['node_tree_name'])
             context.scene.render.engine = root['__info__']['render_engine']
             node_tree.use_nodes = True
             nodes = node_tree.node_tree.nodes
             links = node_tree.node_tree.links
         elif root['__info__']['node_tree_id'] == "MitsubaShaderNodeTree":
+            # make sure in correct render mode
+            if root['__info__']['render_engine'] != context.scene.render.engine:
+                self.report({"ERROR"}, "NodeIO: Please Switch To '{}' Engine".format(root['__info__']
+                                                                                     ['render_engine']))
+                return
+
             node_tree = bpy.data.materials.new(root['__info__']['node_tree_name'])
+            context.space_data.node_tree = node_tree
             mitsuba_tree = bpy.data.node_groups.new(name=root['__info__']['node_tree_name'],
                                                     type="MitsubaShaderNodeTree")
             nodes = mitsuba_tree.nodes
             links = mitsuba_tree.links
             node_tree.mitsuba_nodes.nodetree = mitsuba_tree.name
 
-        elif root['__info__']['node_tree_id'] == "an_AnimationNodeTree":
+        elif root['__info__']['node_tree_id'] in ("an_AnimationNodeTree", "SverchCustomTreeType"):
             node_tree = bpy.data.node_groups.new(name=root['__info__']['node_tree_name'],
-                                                 type="an_AnimationNodeTree")
+                                                 type=root['__info__']['node_tree_id'])
+            context.space_data.node_tree = node_tree
             nodes = node_tree.nodes
             links = node_tree.links
 
@@ -544,14 +556,6 @@ def import_node_tree(self, context):
             context.object.data.materials.append(node_tree)
 
 
-def s_to_t(s):
-    tu = s.split(", ")
-    tu[0] = tu[0].replace("(", "")
-    tu[len(tu) - 1] = tu[len(tu) - 1].replace(")", "")
-
-    return [float(i) for i in tu]
-
-
 def set_attributes(self, temp, val, att):
     # determine attribute type, exec() can be used if value gets directly set to attribute
     if att == "image" and val in bpy.data.images:
@@ -619,9 +623,9 @@ def set_attributes(self, temp, val, att):
                 exec("temp.{} = '{}'".format(att, val))
             else:
                 exec("temp.{} = {}".format(att, val))
-        except AttributeError:
-            self.report({"WARNING"}, "NodeIO: Attribute Error, Name={}, ID={}, Attribute={}, Value={}".
-                        format(temp.name, temp.bl_idname, att, val))
+        except (AttributeError, TypeError) as e:
+            self.report({"WARNING"}, "NodeIO: Error={}, Node Name={}, Node ID={}, Attribute={}, Value={}".
+                        format(type(e).__name__, temp.name, temp.bl_idname, att, val))
 
 # PROPERTIES
 bpy.types.Scene.node_io_import_export = EnumProperty(name="Import/Export", items=(("1", "Import", ""),
@@ -629,8 +633,9 @@ bpy.types.Scene.node_io_import_export = EnumProperty(name="Import/Export", items
 bpy.types.Scene.node_io_export_path = StringProperty(name="Export Path", subtype="DIR_PATH")
 bpy.types.Scene.node_io_import_path_file = StringProperty(name="Import Path", subtype="FILE_PATH")
 bpy.types.Scene.node_io_import_path_dir = StringProperty(name="Import Path", subtype="DIR_PATH")
-bpy.types.Scene.node_io_dependency_save_type = EnumProperty(name="Image Path", items=(("1", "Absolute Paths", ""),
-                                                                                      ("2", "Make Paths Relative", "")),
+bpy.types.Scene.node_io_dependency_save_type = EnumProperty(name="Dependency Paths", items=(("1", "Absolute Paths", ""),
+                                                                                            ("2", "Make Paths Relative",
+                                                                                             "")),
                                                             default="1")
 bpy.types.Scene.node_io_is_auto_add = BoolProperty(name="Add Node Tree To Object?", default=True)
 bpy.types.Scene.node_io_import_type = EnumProperty(name="Import Type", items=(("1", "Single", ""),
