@@ -50,7 +50,11 @@ def make_list(data):
 
 def collect_node_data(n: bpy.types.Node):
     ns, inputs, outputs, dependencies = [], [], [], []
-    is_group = True if n.type == "GROUP" else False
+    node_data = {"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}
+    is_group = False
+
+    if n.bl_idname == "ShaderNodeGroup" or n.bl_idname[0:11] == "SvGroupNode":
+        is_group = True
 
     # certain nodes that do not support some operations, like having no .inputs or .outputs,
     node_exclude_list = ['NodeReroute', 'NodeGroupInput', 'NodeGroupOutput']
@@ -125,6 +129,11 @@ def collect_node_data(n: bpy.types.Node):
 
     exclude_nodes = {'SvGetPropNode', "SvSetPropNode"}
 
+    # Manual Attribute Collection ------------------------------------------->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    if n.bl_idname[0:11] == "SvGroupNode":
+        node_data["monad.name"] = n.monad.name
+
+    # Automatic Attribute Collection ---------------------------------------->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if n.bl_idname not in exclude_nodes:
         for method in getmembers(n):
             if method[0] not in exclude_attributes:
@@ -177,8 +186,7 @@ def collect_node_data(n: bpy.types.Node):
         ns += ['prop_name', n.prop_name, 'location', make_list(n.location), 'name', n.name, 'color', make_list(n.color),
                'hide', n.hide]
 
-    return [{"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}, is_group,
-            dependencies]
+    return [node_data, is_group, dependencies]
 
 
 # recursive method that collects all nodes and if group node goes and collects its nodes
@@ -191,9 +199,11 @@ def collect_nodes(nodes, links, dependencies, names, name, data):
         out, is_group, im = collect_node_data(n)
         m_n.append(out)
         dependencies.append(im)
-        
-        if is_group:
+
+        if is_group and n.bl_idname == "ShaderNodeGroup":
             collect_nodes(n.node_tree.nodes, n.node_tree.links, dependencies, names, n.node_tree.name, data)
+        elif is_group and n.bl_idname[0:11] == "SvGroupNode":
+            collect_nodes(n.monad.nodes, n.monad.links, dependencies, names, n.monad.name, data)
         
     for l in links:  # links
         out = link_info(l)
@@ -351,9 +361,6 @@ def export_node_tree(self, context):
 
 
 def import_node_tree(self, context):
-    import_path = None
-    folder_path = None  # use for getting dependencies if needed
-
     if context.scene.node_io_import_type == "1":  # single file
         import_path = bpy.path.abspath(context.scene.node_io_import_path_file)
         folder_path = path.dirname(import_path)
@@ -450,14 +457,16 @@ def import_node_tree(self, context):
 
         # add new nodes
         order = root['__info__']['group_order']
-        for group_order in order:
-            group = root[group_order]
+        for group_name in order:
+            group = root[group_name]
 
             # set up which node tree to use
-            if group_order == "main":
+            if group_name == "main":
                 nt = nodes
-            else:
-                nt = bpy.data.node_groups.new(group_order, "ShaderNodeTree")
+            elif root['__info__']['node_tree_id'] == "ShaderNodeGroup":
+                nt = bpy.data.node_groups.new(group_name, "ShaderNodeTree")
+            elif root['__info__']['node_tree_id'] == 'SverchCustomTreeType':
+                nt = bpy.data.node_groups.new(group_name, 'SverchGroupTreeType')
 
             is_nodes = True  # nodes or links
             parents = []
@@ -473,10 +482,14 @@ def import_node_tree(self, context):
                     self.report({"WARNING"}, "Generic Note Node Add-on Not Installed")
                 else:
                     # retrieve node name, create node
-                    if group_order != "main":
-                        temp = nt.nodes.new(node["bl_idname"])
+                    node_id = node['bl_idname']
+                    if node_id[0:11] == "SvGroupNode":  # find what the node_groups id is and use it
+                        node_id = bpy.data.node_groups[node['monad.name']].cls_bl_idname
+
+                    if group_name == "main":
+                        temp = nt.new(node_id)
                     else:
-                        temp = nt.new(node["bl_idname"])
+                        temp = nt.nodes.new(node_id)
 
                     # node specific is first so that groups are set up first
                     nos = node["node_specific"]
@@ -524,7 +537,7 @@ def import_node_tree(self, context):
 
             # set parents
             for parent in parents:
-                if group_order != "main":
+                if group_name != "main":
                     nt.nodes[parent['node']].parent = nt.nodes[parent['parent']]
                     nt.nodes[parent['node']].location = parent['location'] + nt.nodes[parent['parent']].location
                 else:
@@ -533,7 +546,7 @@ def import_node_tree(self, context):
 
             # links
             for link in group['links']:
-                if group_order == "main":
+                if group_name == "main":
                     o = nt[link[0]].outputs[link[1]]
                     i = nt[link[2]].inputs[link[3]]
                     links.new(o, i)
@@ -544,14 +557,13 @@ def import_node_tree(self, context):
 
                 is_nodes = not is_nodes
 
-        for i in bpy.data.node_groups:
-            if i.users == 0:
-                bpy.data.node_groups.remove(i)
-
         # add material to object
         if context.object is not None and context.scene.node_io_is_auto_add and root['__info__']['node_tree_id'] in \
                 ('ShaderNodeTree', 'MitsubaShaderNodeTree'):
             context.object.data.materials.append(node_tree)
+
+        self.report({"INFO"}, "NodeIO: Imported {} With {} Nodes".format(root['__info__']['node_tree_name'],
+                                                                         root['__info__']['number_of_nodes']))
 
 
 def set_attributes(self, temp, val, att):
