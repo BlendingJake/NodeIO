@@ -1,7 +1,7 @@
 bl_info = {
     "name": "NodeIO",
     "author": "Jacob Morris",
-    "version": (0, 2),
+    "version": (0, 3),
     "blender": (2, 78, 0),
     "location": "Node Editor > Properties",
     "description": "Allows The Exporting And Importing Of Node Trees Via .bnodes Files",
@@ -341,6 +341,9 @@ def export_node_tree(self, context):
             file = open(save_path, 'w')
             json.dump(json_root, file, indent=4 if DEBUG_FILE else 0)
             file.close()
+
+            self.report({"INFO"}, "NodeIO: Exported {} With {} Nodes".format(json_root['__info__']['node_tree_name'],
+                                                                             json_root['__info__']['number_of_nodes']))
         except (PermissionError, FileNotFoundError):
             self.report({"ERROR"}, "Permission Denied '{}'".format(save_path))
             return
