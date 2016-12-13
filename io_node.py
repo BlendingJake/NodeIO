@@ -33,8 +33,8 @@ import zipfile
 from mathutils import *
 import json
 
-VERSION = (0, 2)
-DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
+VERSION = (0, 3)
+DEBUG_FILE = False  # makes JSON file more human readable at the cost of file-size
 ROUND = 4
 
 
