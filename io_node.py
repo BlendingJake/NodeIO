@@ -461,104 +461,109 @@ def import_node_tree(self, context):
         # add new nodes
         order = root['__info__']['group_order']
         for group_name in order:
-            group = root[group_name]
+            if group_name not in bpy.data.node_groups or group_name == "main":  # create only if needed
+                group = root[group_name]
 
-            # set up which node tree to use
-            if group_name == "main":
-                nt = nodes
-            elif root['__info__']['node_tree_id'] == "ShaderNodeGroup":
-                nt = bpy.data.node_groups.new(group_name, "ShaderNodeTree")
-            elif root['__info__']['node_tree_id'] == 'SverchCustomTreeType':
-                nt = bpy.data.node_groups.new(group_name, 'SverchGroupTreeType')
-
-            is_nodes = True  # nodes or links
-            parents = []
-
-            for node in group['nodes']:
-                parent = {}
-
-                # check if node is custom then make sure it is installed
-                if node["bl_idname"] == "GenericNoteNode" and \
-                        ("generic_note" not in bpy.context.user_preferences.addons.keys() and
-                         "genericnote" not in bpy.context.user_preferences.addons.keys()):
-
-                    self.report({"WARNING"}, "Generic Note Node Add-on Not Installed")
-                else:
-                    # retrieve node name, create node
-                    node_id = node['bl_idname']
-                    if node_id[0:11] == "SvGroupNode":  # find what the node_groups id is and use it
-                        node_id = bpy.data.node_groups[node['monad.name']].cls_bl_idname
-
-                    if group_name == "main":
-                        temp = nt.new(node_id)
-                    else:
-                        temp = nt.nodes.new(node_id)
-
-                    # node specific is first so that groups are set up first
-                    nos = node["node_specific"]
-                    if nos:
-                        for i in range(0, len(nos), 2):  # step by two because name, value, name, value...
-                            att = nos[i]
-                            val = nos[i + 1]
-
-                            # group node inputs and outputs
-                            if att in ("group_input", "group_output"):
-                                for sub in range(0, len(val), 2):
-                                    sub_val = [val[sub], val[sub + 1]]
-                                    if att == "group_input":
-                                        nt.inputs.new(sub_val[0], sub_val[1])
-                                    else:
-                                        nt.outputs.new(sub_val[0], sub_val[1])
-                            elif att == "parent" and val is not None:  # don't set parent in case not created yet
-                                parent['parent'] = val
-                            elif val is not None:
-                                set_attributes(self, temp, val, att)
-
-                    # inputs
-                    if node['inputs']:
-                        for i in node['inputs']:
-                            for val_key in i['values'].keys():
-                                if isinstance(i['values'][val_key], str):
-                                    exec("temp.inputs[{}].{} = '{}'".format(i['index'], val_key, i['values'][val_key]))
-                                else:
-                                    exec("temp.inputs[{}].{} = {}".format(i['index'], val_key, i['values'][val_key]))
-
-                    # outputs
-                    if node['outputs']:
-                        for i in node['outputs']:
-                            for val_key in i['values'].keys():
-                                if isinstance(i['values'][val_key], str):
-                                    exec("temp.outputs[{}].{} = '{}'".format(i['index'], val_key, i['values'][val_key]))
-                                else:
-                                    exec("temp.outputs[{}].{} = {}".format(i['index'], val_key, i['values'][val_key]))
-
-                    # deal with parent
-                    if parent:
-                        parent['node'] = temp.name
-                        parent['location'] = temp.location
-                        parents.append(parent)
-
-            # set parents
-            for parent in parents:
-                if group_name != "main":
-                    nt.nodes[parent['node']].parent = nt.nodes[parent['parent']]
-                    nt.nodes[parent['node']].location = parent['location'] + nt.nodes[parent['parent']].location
-                else:
-                    nt[parent['node']].parent = nt[parent['parent']]
-                    nt[parent['node']].location = parent['location'] + nt[parent['parent']].location
-
-            # links
-            for link in group['links']:
+                # set up which node tree to use
                 if group_name == "main":
-                    o = nt[link[0]].outputs[link[1]]
-                    i = nt[link[2]].inputs[link[3]]
-                    links.new(o, i)
-                else:
-                    o = nt.nodes[link[0]].outputs[link[1]]
-                    i = nt.nodes[link[2]].inputs[link[3]]
-                    nt.links.new(o, i)
+                    nt = nodes
+                elif root['__info__']['node_tree_id'] == "ShaderNodeTree":
+                    nt = bpy.data.node_groups.new(group_name, "ShaderNodeTree")
+                elif root['__info__']['node_tree_id'] == 'SverchCustomTreeType':
+                    nt = bpy.data.node_groups.new(group_name, 'SverchGroupTreeType')
 
-                is_nodes = not is_nodes
+                is_nodes = True  # nodes or links
+                parents = []
+
+                for node in group['nodes']:
+                    parent = {}
+
+                    # check if node is custom then make sure it is installed
+                    if node["bl_idname"] == "GenericNoteNode" and \
+                            ("generic_note" not in bpy.context.user_preferences.addons.keys() and
+                                     "genericnote" not in bpy.context.user_preferences.addons.keys()):
+
+                        self.report({"WARNING"}, "Generic Note Node Add-on Not Installed")
+                    else:
+                        # retrieve node name, create node
+                        node_id = node['bl_idname']
+                        if node_id[0:11] == "SvGroupNode":  # find what the node_groups id is and use it
+                            node_id = bpy.data.node_groups[node['monad.name']].cls_bl_idname
+
+                        if group_name == "main":
+                            temp = nt.new(node_id)
+                        else:
+                            temp = nt.nodes.new(node_id)
+
+                        # node specific is first so that groups are set up first
+                        nos = node["node_specific"]
+                        if nos:
+                            for i in range(0, len(nos), 2):  # step by two because name, value, name, value...
+                                att = nos[i]
+                                val = nos[i + 1]
+
+                                # group node inputs and outputs
+                                if att in ("group_input", "group_output"):
+                                    for sub in range(0, len(val), 2):
+                                        sub_val = [val[sub], val[sub + 1]]
+                                        if att == "group_input":
+                                            nt.inputs.new(sub_val[0], sub_val[1])
+                                        else:
+                                            nt.outputs.new(sub_val[0], sub_val[1])
+                                elif att == "parent" and val is not None:  # don't set parent in case not created yet
+                                    parent['parent'] = val
+                                elif val is not None:
+                                    set_attributes(self, temp, val, att)
+
+                        # inputs
+                        if node['inputs']:
+                            for i in node['inputs']:
+                                for val_key in i['values'].keys():
+                                    if isinstance(i['values'][val_key], str):
+                                        exec("temp.inputs[{}].{} = '{}'".format(i['index'], val_key,
+                                                                                i['values'][val_key]))
+                                    else:
+                                        exec("temp.inputs[{}].{} = {}".format(i['index'], val_key,
+                                                                              i['values'][val_key]))
+
+                        # outputs
+                        if node['outputs']:
+                            for i in node['outputs']:
+                                for val_key in i['values'].keys():
+                                    if isinstance(i['values'][val_key], str):
+                                        exec("temp.outputs[{}].{} = '{}'".format(i['index'], val_key,
+                                                                                 i['values'][val_key]))
+                                    else:
+                                        exec("temp.outputs[{}].{} = {}".format(i['index'], val_key,
+                                                                               i['values'][val_key]))
+
+                        # deal with parent
+                        if parent:
+                            parent['node'] = temp.name
+                            parent['location'] = temp.location
+                            parents.append(parent)
+
+                # set parents
+                for parent in parents:
+                    if group_name != "main":
+                        nt.nodes[parent['node']].parent = nt.nodes[parent['parent']]
+                        nt.nodes[parent['node']].location = parent['location'] + nt.nodes[parent['parent']].location
+                    else:
+                        nt[parent['node']].parent = nt[parent['parent']]
+                        nt[parent['node']].location = parent['location'] + nt[parent['parent']].location
+
+                # links
+                for link in group['links']:
+                    if group_name == "main":
+                        o = nt[link[0]].outputs[link[1]]
+                        i = nt[link[2]].inputs[link[3]]
+                        links.new(o, i)
+                    else:
+                        o = nt.nodes[link[0]].outputs[link[1]]
+                        i = nt.nodes[link[2]].inputs[link[3]]
+                        nt.links.new(o, i)
+
+                    is_nodes = not is_nodes
 
         # add material to object
         if context.object is not None and context.scene.node_io_is_auto_add and root['__info__']['node_tree_id'] in \
