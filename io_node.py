@@ -34,7 +34,7 @@ from mathutils import *
 import json
 
 VERSION = (0, 3)
-DEBUG_FILE = False  # makes JSON file more human readable at the cost of file-size
+DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
 ROUND = 4
 
 
@@ -255,13 +255,14 @@ def export_node_tree(self, context):
 
     # check data
     if not export_path:
-        self.report({"ERROR"}, "Empty Export Path")
+        self.report({"ERROR"}, "NodeIO: Empty Export Path")
         return
     elif not path.exists(export_path):
-        self.report({"ERROR"}, "Export Path '{}' Does Not Exist".format(export_path))
+        self.report({"ERROR"}, "NodeIO: Export Path '{}' Does Not Exist".format(export_path))
         return
     elif node_tree is None:
-        self.report({"ERROR"}, "No Active Node Tree")
+        self.report({"ERROR"}, "NodeIO: No Active Node Tree")
+        return
 
     # COLLECT NEED INFORMATION: to_export allows multiple node_trees at a time. Info formatted into dict
     # {"nodes":____, "links":____, "name":____, "bl_idname":_____}
@@ -278,7 +279,7 @@ def export_node_tree(self, context):
             folder_path = export_path + os_file_sep + folder_name
             mkdir(folder_path)
         except FileExistsError:
-            self.report({"ERROR"}, "Directory '{}' Already Exists, Cannot Continue".format(folder_path))
+            self.report({"ERROR"}, "NodeIO: Directory '{}' Already Exists, Cannot Continue".format(folder_path))
             return
     else:
         folder_path = export_path
@@ -345,7 +346,7 @@ def export_node_tree(self, context):
             self.report({"INFO"}, "NodeIO: Exported {} With {} Nodes".format(json_root['__info__']['node_tree_name'],
                                                                              json_root['__info__']['number_of_nodes']))
         except (PermissionError, FileNotFoundError):
-            self.report({"ERROR"}, "Permission Denied '{}'".format(save_path))
+            self.report({"ERROR"}, "NodeIO: Permission Denied '{}'".format(save_path))
             return
 
     # zip folder
@@ -373,13 +374,13 @@ def import_node_tree(self, context):
 
     # check file path
     if not import_path:
-        self.report({"ERROR"}, "Empty Import Path")
+        self.report({"ERROR"}, "NodeIO: Empty Import Path")
         return
     elif not path.exists(import_path):
-        self.report({"ERROR"}, "Filepath '{}' Does Not Exist".format(import_path))
+        self.report({"ERROR"}, "NodeIO: Filepath '{}' Does Not Exist".format(import_path))
         return
     elif context.scene.node_io_import_type == "1" and not import_path.endswith(".bnodes"):
-        self.report({"ERROR"}, "Filepath Does Not End With .bnodes")
+        self.report({"ERROR"}, "NodeIO: Filepath Does Not End With .bnodes")
         return
 
     # collect filepaths
@@ -456,7 +457,7 @@ def import_node_tree(self, context):
                     depend_errors += 1
 
         if depend_errors:
-            self.report({"ERROR"}, str(depend_errors) + " Dependency(ies) Couldn't Be Loaded")
+            self.report({"ERROR"}, "NodeIO: " + str(depend_errors) + " Dependency(ies) Couldn't Be Loaded")
 
         # add new nodes
         order = root['__info__']['group_order']
