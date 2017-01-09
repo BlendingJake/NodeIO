@@ -1,7 +1,7 @@
 bl_info = {
     "name": "NodeIO",
     "author": "Jacob Morris",
-    "version": (0, 3),
+    "version": (0, 4),
     "blender": (2, 78, 0),
     "location": "Node Editor > Properties",
     "description": "Allows The Exporting And Importing Of Node Trees Via .bnodes Files",
@@ -33,7 +33,7 @@ import zipfile
 from mathutils import *
 import json
 
-VERSION = (0, 3)
+VERSION = (0, 4)
 DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
 ROUND = 4
 
@@ -104,13 +104,13 @@ def collect_node_data(n: bpy.types.Node):
                 outputs.append(data)
     elif n.bl_idname == "NodeGroupInput":
         temp = []
-        for i in n.inputs:
+        for i in n.outputs:
             temp.append(i.bl_idname)
             temp.append(i.name)
         ns += ["group_input", temp]
     elif n.bl_idname == "NodeGroupOutput":
         temp = []
-        for i in n.outputs:
+        for i in n.inputs:
             temp.append(i.bl_idname)
             temp.append(i.name)
         ns += ["group_output", temp]
@@ -508,9 +508,9 @@ def import_node_tree(self, context):
                                     for sub in range(0, len(val), 2):
                                         sub_val = [val[sub], val[sub + 1]]
                                         if att == "group_input":
-                                            nt.inputs.new(sub_val[0], sub_val[1])
-                                        else:
                                             nt.outputs.new(sub_val[0], sub_val[1])
+                                        else:
+                                            nt.inputs.new(sub_val[0], sub_val[1])
                                 elif att == "parent" and val is not None:  # don't set parent in case not created yet
                                     parent['parent'] = val
                                 elif val is not None:
@@ -560,6 +560,7 @@ def import_node_tree(self, context):
                         i = nt[link[2]].inputs[link[3]]
                         links.new(o, i)
                     else:
+                        print(link)
                         o = nt.nodes[link[0]].outputs[link[1]]
                         i = nt.nodes[link[2]].inputs[link[3]]
                         nt.links.new(o, i)
