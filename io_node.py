@@ -34,7 +34,7 @@ from mathutils import *
 import json
 
 VERSION = (0, 4)
-DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
+DEBUG_FILE = False  # makes JSON file more human readable at the cost of file-size
 ROUND = 4
 
 
