@@ -384,19 +384,36 @@ def import_node_tree(self, context):
     elif not path.exists(import_path):
         self.report({"ERROR"}, "NodeIO: Filepath '{}' Does Not Exist".format(import_path))
         return
-    elif context.scene.node_io_import_type == "1" and not import_path.endswith(".bnodes"):
+    elif context.scene.node_io_import_type == "1" and not import_path.endswith(".bnodes") and \
+            not import_path.endswith('.zip'):
         self.report({"ERROR"}, "NodeIO: Filepath Does Not End With .bnodes")
         return
 
     # collect filepaths
     import_list = []
 
-    if context.scene.node_io_import_type == "2":  # import all files in folder
+    if context.scene.node_io_import_type == "2" and not import_path.endswith('.zip'):  # import all files in folder
         files = listdir(import_path)
 
         for file in files:
             if file.endswith(".bnodes"):
                 import_list.append(import_path + os_file_sep + file)
+    elif import_path.endswith('.zip'):
+        zip = zipfile.ZipFile(import_path)
+        folder_path = path.dirname(import_path) + os_file_sep + path.basename(import_path).split(".")[0]
+
+        try:
+            mkdir(folder_path)  # create new folder
+        except FileExistsError:
+            self.report({"INFO"}, "NodeIO: Folder Already Exists")
+
+        for file_name in zip.namelist():  # open zip file and write it to new directory
+            f = open(folder_path + os_file_sep + file_name, 'wb')
+            f.write(zip.open(file_name, 'r').read())
+            f.close()
+
+            if file_name.endswith('.bnodes'):
+                import_list.append(folder_path + os_file_sep + file_name)
     else:
         import_list.append(import_path)
 
@@ -487,8 +504,7 @@ def import_node_tree(self, context):
                     # check if node is custom then make sure it is installed
                     if node["bl_idname"] == "GenericNoteNode" and \
                             ("generic_note" not in bpy.context.user_preferences.addons.keys() and
-                                     "genericnote" not in bpy.context.user_preferences.addons.keys()):
-
+                             "genericnote" not in bpy.context.user_preferences.addons.keys()):
                         self.report({"WARNING"}, "Generic Note Node Add-on Not Installed")
                     else:
                         # retrieve node name, create node
