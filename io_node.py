@@ -276,11 +276,15 @@ def export_node_tree(self, context):
     # create folder if more then one node_tree, or if paths are being made relative and there might be dependencies
     if len(to_export) > 1 or context.scene.node_io_dependency_save_type == "2":
         try:
+            if len(to_export) > 1:
+                folder_name = "mat_group_{}".format(len(to_export))
+            else:
+                folder_name = to_export[0]['name']
             folder_path = export_path + os_file_sep + folder_name
             mkdir(folder_path)
         except FileExistsError:
-            self.report({"ERROR"}, "NodeIO: Directory '{}' Already Exists, Cannot Continue".format(folder_path))
-            return
+            self.report({"INFO"}, "NodeIO: Directory '{}' Already Exists, Will Add/Overwrite Files In Directory".
+                        format(folder_path))
     else:
         folder_path = export_path
 
@@ -343,11 +347,11 @@ def export_node_tree(self, context):
             json.dump(json_root, file, indent=4 if DEBUG_FILE else 0)
             file.close()
 
-            self.report({"INFO"}, "NodeIO: Exported '{}' With {} Nodes".format(json_root['__info__']['node_tree_name'],
-                                                                               json_root['__info__']['number_of_nodes'])
-                        )
+            self.report({"INFO"}, "NodeIO: Exported '{}' With {} Nodes And {} Dependencies".format(
+                json_root['__info__']['node_tree_name'], json_root['__info__']['number_of_nodes'],
+                len(json_root['__info__']['dependencies'])))
         except (PermissionError, FileNotFoundError):
-            self.report({"ERROR"}, "NodeIO: Permission Denied '{}'".format(save_path))
+            self.report({"ERROR"}, "NodeIO: Permission Denied '{}', Cannot Continue".format(save_path))
             return
 
     # zip folder
@@ -450,7 +454,7 @@ def import_node_tree(self, context):
         for depend in dependencies:
             if depend[0] == "image" and depend[1] not in bpy.data.images:
                 try:
-                    if root['__info__']['path_type'] == "Relative":
+                    if root['__info__']['path_type'] == "relative":
                         bpy.data.images.load(folder_path + os_file_sep + depend[1])
                     else:
                         bpy.data.images.load(depend[2])
