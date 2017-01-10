@@ -343,8 +343,9 @@ def export_node_tree(self, context):
             json.dump(json_root, file, indent=4 if DEBUG_FILE else 0)
             file.close()
 
-            self.report({"INFO"}, "NodeIO: Exported {} With {} Nodes".format(json_root['__info__']['node_tree_name'],
-                                                                             json_root['__info__']['number_of_nodes']))
+            self.report({"INFO"}, "NodeIO: Exported '{}' With {} Nodes".format(json_root['__info__']['node_tree_name'],
+                                                                               json_root['__info__']['number_of_nodes'])
+                        )
         except (PermissionError, FileNotFoundError):
             self.report({"ERROR"}, "NodeIO: Permission Denied '{}'".format(save_path))
             return
@@ -506,11 +507,10 @@ def import_node_tree(self, context):
                                 # group node inputs and outputs
                                 if att in ("group_input", "group_output"):
                                     for sub in range(0, len(val), 2):
-                                        sub_val = [val[sub], val[sub + 1]]
                                         if att == "group_input":
-                                            nt.outputs.new(sub_val[0], sub_val[1])
+                                            temp.outputs.new(val[sub], val[sub + 1])
                                         else:
-                                            nt.inputs.new(sub_val[0], sub_val[1])
+                                            temp.inputs.new(val[sub], val[sub + 1])
                                 elif att == "parent" and val is not None:  # don't set parent in case not created yet
                                     parent['parent'] = val
                                 elif val is not None:
@@ -560,7 +560,6 @@ def import_node_tree(self, context):
                         i = nt[link[2]].inputs[link[3]]
                         links.new(o, i)
                     else:
-                        print(link)
                         o = nt.nodes[link[0]].outputs[link[1]]
                         i = nt.nodes[link[2]].inputs[link[3]]
                         nt.links.new(o, i)
