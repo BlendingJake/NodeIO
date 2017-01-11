@@ -34,7 +34,7 @@ from mathutils import *
 import json
 
 VERSION = (0, 4)
-DEBUG_FILE = False  # makes JSON file more human readable at the cost of file-size
+DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
 ROUND = 4
 
 
@@ -344,7 +344,10 @@ def export_node_tree(self, context):
         # write file
         try:
             file = open(save_path, 'w')
-            json.dump(json_root, file, indent=4 if DEBUG_FILE else 0)
+            if DEBUG_FILE:  # make multiple lines and indent if trying to debug
+                json.dump(json_root, file, indent=4)
+            else:
+                json.dump(json_root, file)
             file.close()
 
             self.report({"INFO"}, "NodeIO: Exported '{}' With {} Nodes And {} Dependencies".format(
@@ -434,7 +437,6 @@ def import_node_tree(self, context):
                 return
 
             node_tree = bpy.data.materials.new(root['__info__']['node_tree_name'])
-            context.scene.render.engine = root['__info__']['render_engine']
             node_tree.use_nodes = True
             nodes = node_tree.node_tree.nodes
             links = node_tree.node_tree.links
@@ -495,7 +497,6 @@ def import_node_tree(self, context):
                 elif root['__info__']['node_tree_id'] == 'SverchCustomTreeType':
                     nt = bpy.data.node_groups.new(group_name, 'SverchGroupTreeType')
 
-                is_nodes = True  # nodes or links
                 parents = []
 
                 for node in group['nodes']:
@@ -531,6 +532,7 @@ def import_node_tree(self, context):
                                             temp.outputs.new(val[sub], val[sub + 1])
                                         else:
                                             temp.inputs.new(val[sub], val[sub + 1])
+
                                 elif att == "parent" and val is not None:  # don't set parent in case not created yet
                                     parent['parent'] = val
                                 elif val is not None:
@@ -576,15 +578,13 @@ def import_node_tree(self, context):
                 # links
                 for link in group['links']:
                     if group_name == "main":
-                        o = nt[link[0]].outputs[link[1]]
-                        i = nt[link[2]].inputs[link[3]]
-                        links.new(o, i)
+                        use_nt, use_ln = nt, links
                     else:
-                        o = nt.nodes[link[0]].outputs[link[1]]
-                        i = nt.nodes[link[2]].inputs[link[3]]
-                        nt.links.new(o, i)
+                        use_nt, use_ln = nt.nodes, nt.links
 
-                    is_nodes = not is_nodes
+                    o = use_nt[link[0]].outputs[link[1]]
+                    i = use_nt[link[2]].inputs[link[3]]
+                    use_ln.new(o, i)
 
         # add material to object
         if context.object is not None and context.scene.node_io_is_auto_add and root['__info__']['node_tree_id'] in \
