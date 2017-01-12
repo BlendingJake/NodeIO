@@ -576,14 +576,41 @@ def import_node_tree(self, context):
                         nt[parent['node']].location = parent['location'] + nt[parent['parent']].location
 
                 # links
-                for link in group['links']:
-                    if group_name == "main":
-                        use_nt, use_ln = nt, links
-                    else:
-                        use_nt, use_ln = nt.nodes, nt.links
+                group_in_links, group_out_links = [], []  # to workaround bug in Blender
 
-                    o = use_nt[link[0]].outputs[link[1]]
+                if group_name == "main":
+                    use_nt, use_ln = nt, links
+                else:
+                    use_nt, use_ln = nt.nodes, nt.links
+
+                for link in group['links']:
+                    # workaround for bug, insert into correct position
+                    if use_nt[link[0]].bl_idname == "NodeGroupInput":
+                        index = 0
+                        for pos in range(len(group_in_links)):
+                            if link[1] > group_in_links[pos][1]:
+                                index = pos + 1
+                        group_in_links.insert(index, link)
+                    elif use_nt[link[2]].bl_idname == "NodeGroupOutput":
+                        index = 0
+                        for pos in range(len(group_out_links)):
+                            if link[3] > group_out_links[pos][3]:
+                                index = pos + 1
+                        group_out_links.insert(index, link)
+                    else:
+                        o = use_nt[link[0]].outputs[link[1]]
+                        i = use_nt[link[2]].inputs[link[3]]
+                        use_ln.new(o, i)
+
+                # sort group in and group out links by index so order is correct
+                for link in group_in_links:
+                    o = use_nt[link[0]].outputs[link[1]]  # virtual socket
                     i = use_nt[link[2]].inputs[link[3]]
+                    use_ln.new(o, i)
+
+                for link in group_out_links:
+                    o = use_nt[link[0]].outputs[link[1]]
+                    i = use_nt[link[2]].inputs[link[3]]  # virtual socket
                     use_ln.new(o, i)
 
         # add material to object
