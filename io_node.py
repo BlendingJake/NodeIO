@@ -479,9 +479,10 @@ def import_node_tree(self, context):
             if depend[0] == "image" and depend[1] not in bpy.data.images:
                 try:
                     if root['__info__']['path_type'] == "relative":
-                        bpy.data.images.load(folder_path + os_file_sep + depend[1])
+                        image = bpy.data.images.load(folder_path + os_file_sep + depend[1])
                     else:
-                        bpy.data.images.load(depend[2])
+                        image = bpy.data.images.load(depend[2])
+                    image.name = depend[1]  # set name in-case the image was renamed
                 except RuntimeError:
                     depend_errors += 1
 
