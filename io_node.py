@@ -710,8 +710,11 @@ bpy.types.Scene.node_io_dependency_save_type = EnumProperty(name="Dependency Pat
                                                                                              "")),
                                                             default="1")
 bpy.types.Scene.node_io_is_auto_add = BoolProperty(name="Add Node Tree To Object?", default=True)
-bpy.types.Scene.node_io_import_type = EnumProperty(name="Import Type", items=(("1", "Single", ""),
-                                                                              ("2", "Multiple", "")))
+bpy.types.Scene.node_io_import_type = EnumProperty(name="Import Type", items=(("1", "File", "Imports Just Selected " +
+                                                                               "File Unless .zip, In Which Case All " +
+                                                                               "Files Within .zip Folder Are Imported"),
+                                                                              ("2", "Folder",
+                                                                               "Imports All Files Within Folder")))
 bpy.types.Scene.node_io_is_compress = BoolProperty(name="Compress Folder?")
 
 
