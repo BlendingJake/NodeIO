@@ -319,6 +319,7 @@ def export_node_tree(self, context):
 
         # dependencies
         depend_out = []  # collect all dependencies to place as attribute of root element so they can be imported first
+        duplicates = {}
 
         # absolute filepaths
         if context.scene.node_io_dependency_save_type == "1":
@@ -326,17 +327,21 @@ def export_node_tree(self, context):
 
             # of format [node, node,...] where each node is [depend, depend,...] and depend is [type, name, path]
             for node in dependencies:
-                for image in node:
-                    depend_out.append([image[0], image[1], bpy.path.abspath(image[2])])
+                for depend in node:
+                    if depend[1] not in duplicates or depend[1] in duplicates and depend[2] != duplicates[depend[1]]:
+                        depend_out.append([depend[0], depend[1], bpy.path.abspath(depend[2])])
+                        duplicates[depend[1]] = bpy.path.abspath(depend[2])
         # relative filepaths
         else:
             json_root['__info__']['path_type'] = "relative"
 
             for node in dependencies:
                 for depend in node:
-                    depend_path = bpy.path.abspath(depend[2])
-                    depend_out.append([depend[0], depend[1], os_file_sep + depend[1]])
-                    copyfile(depend_path, folder_path + os_file_sep + depend[1])
+                    if depend[1] not in duplicates:
+                        depend_path = bpy.path.abspath(depend[2])
+                        depend_out.append([depend[0], depend[1], os_file_sep + depend[1]])
+                        copyfile(depend_path, folder_path + os_file_sep + depend[1])
+                        duplicates[depend[1]] = depend[1]
 
         json_root['__info__']['dependencies'] = depend_out
         save_path = folder_path + os_file_sep + node_tree["name"] + ".bnodes"
@@ -402,7 +407,7 @@ def import_node_tree(self, context):
             if file.endswith(".bnodes"):
                 import_list.append(import_path + os_file_sep + file)
     elif import_path.endswith('.zip'):
-        zip = zipfile.ZipFile(import_path)
+        zip_folder = zipfile.ZipFile(import_path)
         folder_path = path.dirname(import_path) + os_file_sep + path.basename(import_path).split(".")[0]
 
         try:
@@ -410,9 +415,9 @@ def import_node_tree(self, context):
         except FileExistsError:
             self.report({"INFO"}, "NodeIO: Folder Already Exists")
 
-        for file_name in zip.namelist():  # open zip file and write it to new directory
+        for file_name in zip_folder.namelist():  # open zip file and write it to new directory
             f = open(folder_path + os_file_sep + file_name, 'wb')
-            f.write(zip.open(file_name, 'r').read())
+            f.write(zip_folder.open(file_name, 'r').read())
             f.close()
 
             if file_name.endswith('.bnodes'):
