@@ -105,14 +105,16 @@ def collect_node_data(n: bpy.types.Node):
     elif n.bl_idname == "NodeGroupInput":
         temp = []
         for i in n.outputs:
-            temp.append(i.bl_idname)
-            temp.append(i.name)
+            if i.bl_idname != "NodeSocketVirtual":
+                temp.append(i.bl_idname)
+                temp.append(i.name)
         ns += ["group_input", temp]
     elif n.bl_idname == "NodeGroupOutput":
         temp = []
         for i in n.inputs:
-            temp.append(i.bl_idname)
-            temp.append(i.name)
+            if i.bl_idname != "NodeSocketVirtual":
+                temp.append(i.bl_idname)
+                temp.append(i.name)
         ns += ["group_output", temp]
 
     # list of default values to ignore for smaller file-size, or because not needed, also if property is read-only
@@ -534,10 +536,10 @@ def import_node_tree(self, context):
                                 # group node inputs and outputs
                                 if att in ("group_input", "group_output"):
                                     for sub in range(0, len(val), 2):
-                                        if att == "group_input":
-                                            temp.outputs.new(val[sub], val[sub + 1])
-                                        else:
-                                            temp.inputs.new(val[sub], val[sub + 1])
+                                        if att == "group_input" and val[sub] != "NodeSocketVirtual":
+                                            nt.inputs.new(val[sub], val[sub + 1])
+                                        elif att == "group_output" and val[sub] != "NodeSocketVirtual":
+                                            nt.outputs.new(val[sub], val[sub + 1])
 
                                 elif att == "parent" and val is not None:  # don't set parent in case not created yet
                                     parent['parent'] = val
@@ -581,42 +583,14 @@ def import_node_tree(self, context):
                         nt[parent['node']].parent = nt[parent['parent']]
                         nt[parent['node']].location = parent['location'] + nt[parent['parent']].location
 
-                # links
-                group_in_links, group_out_links = [], []  # to workaround bug in Blender
-
                 if group_name == "main":
                     use_nt, use_ln = nt, links
                 else:
                     use_nt, use_ln = nt.nodes, nt.links
 
                 for link in group['links']:
-                    # workaround for bug, insert into correct position
-                    if use_nt[link[0]].bl_idname == "NodeGroupInput":
-                        index = 0
-                        for pos in range(len(group_in_links)):
-                            if link[1] > group_in_links[pos][1]:
-                                index = pos + 1
-                        group_in_links.insert(index, link)
-                    elif use_nt[link[2]].bl_idname == "NodeGroupOutput":
-                        index = 0
-                        for pos in range(len(group_out_links)):
-                            if link[3] > group_out_links[pos][3]:
-                                index = pos + 1
-                        group_out_links.insert(index, link)
-                    else:
-                        o = use_nt[link[0]].outputs[link[1]]
-                        i = use_nt[link[2]].inputs[link[3]]
-                        use_ln.new(o, i)
-
-                # sort group in and group out links by index so order is correct
-                for link in group_in_links:
-                    o = use_nt[link[0]].outputs[link[1]]  # virtual socket
-                    i = use_nt[link[2]].inputs[link[3]]
-                    use_ln.new(o, i)
-
-                for link in group_out_links:
                     o = use_nt[link[0]].outputs[link[1]]
-                    i = use_nt[link[2]].inputs[link[3]]  # virtual socket
+                    i = use_nt[link[2]].inputs[link[3]]
                     use_ln.new(o, i)
 
         # add material to object
