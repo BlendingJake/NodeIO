@@ -1,8 +1,8 @@
 bl_info = {
     "name": "NodeIO",
     "author": "Jacob Morris",
-    "version": (0, 5),
-    "blender": (2, 78, 0),
+    "version": (0, 6, 0),
+    "blender": (2, 79, 0),
     "location": "Node Editor > Properties",
     "description": "Allows The Exporting And Importing Of Node Trees Via .bnodes Files",
     "category": "Import-Export"
@@ -33,8 +33,8 @@ import zipfile
 from mathutils import *
 import json
 
-VERSION = (0, 5)
-DEBUG_FILE = True  # makes JSON file more human readable at the cost of file-size
+VERSION = (0, 6, 0)
+DEBUG_FILE = False  # makes JSON file more human readable at the cost of file-size
 ROUND = 4
 
 
@@ -53,7 +53,7 @@ def collect_node_data(n: bpy.types.Node):
     node_data = {"inputs": inputs, "outputs": outputs, "node_specific": ns, "bl_idname": n.bl_idname}
     is_group = False
 
-    if n.bl_idname == "ShaderNodeGroup" or n.bl_idname[0:11] == "SvGroupNode":
+    if n.bl_idname in ("ShaderNodeGroup", "TextureNodeGroup") or n.bl_idname[0:11] == "SvGroupNode":
         is_group = True
 
     # certain nodes that do not support some operations, like having no .inputs or .outputs,
@@ -139,22 +139,25 @@ def collect_node_data(n: bpy.types.Node):
     if n.bl_idname not in exclude_nodes:
         for method in getmembers(n):
             if method[0] not in exclude_attributes:
-                t = method[1]
-                val = eval("n.{}".format(method[0]))  # get value
+                t = method[1]  # type of value
+                val = getattr(n, method[0])  # get value
 
                 # special handling for certain types
                 if isinstance(t, list_types):  # TUPLE
                     ns += [method[0], make_list(val)]
                 elif isinstance(t, (bpy.types.CurveMapping, bpy.types.ShaderNodeRGBCurve)):  # CURVES
                     if isinstance(t, bpy.types.CurveMapping):
-                        c = n
+                        if isinstance(n, bpy.types.TextureNodeCurveTime):
+                            c = n.curve
+                        else:
+                            c = n.mapping
                     else:  # happens with n_InterpolationFromCurveMappingNode, has ShaderNodeRGBCurve which has curve
-                        c = n.curveNode
-                    curves = [make_list(c.mapping.black_level), make_list(c.mapping.white_level),
-                              str(c.mapping.clip_max_x), str(c.mapping.clip_max_y), str(c.mapping.clip_min_x),
-                              str(c.mapping.clip_min_y), str(c.mapping.use_clip)]
+                        c = n.curveNode.mapping
+                    curves = [make_list(c.black_level), make_list(c.white_level),
+                              str(c.clip_max_x), str(c.clip_max_y), str(c.clip_min_x),
+                              str(c.clip_min_y), str(c.use_clip)]
 
-                    for curve in c.mapping.curves:
+                    for curve in c.curves:
                         points = [curve.extend]
                         for point in curve.points:
                             points.append([make_list(point.location), point.handle_type])
@@ -180,6 +183,8 @@ def collect_node_data(n: bpy.types.Node):
                     ns += [method[0], round(val, ROUND)]
                 elif isinstance(t, bpy.types.Node):  # FRAME NODE
                     ns += [method[0], val.name]
+                elif isinstance(t, bpy.types.Texture):  # TEXTURE NODE
+                    ns += [method[0], val.name]
 
     # extra information needed for creating nodes
     if n.bl_idname == 'an_CreateListNode':  # have to determine number of inputs, has to be evaluated after assignedType
@@ -202,7 +207,7 @@ def collect_nodes(nodes, links, dependencies, names, name, data):
         m_n.append(out)
         dependencies.append(im)
 
-        if is_group and n.bl_idname == "ShaderNodeGroup":
+        if is_group and n.bl_idname in ("ShaderNodeGroup", "TextureNodeGroup"):
             collect_nodes(n.node_tree.nodes, n.node_tree.links, dependencies, names, n.node_tree.name, data)
         elif is_group and n.bl_idname[0:11] == "SvGroupNode":
             collect_nodes(n.monad.nodes, n.monad.links, dependencies, names, n.monad.name, data)
@@ -274,6 +279,9 @@ def export_node_tree(self, context):
     elif node_tree.bl_idname in ("an_AnimationNodeTree", "SverchCustomTreeType"):
         to_export.append({"nodes": node_tree.nodes, "links": node_tree.links, "name": node_tree.name,
                           "bl_idname": node_tree.bl_idname})
+    elif node_tree.bl_idname == "TextureNodeTree":
+        to_export.append({"nodes": node_tree.nodes, "links": node_tree.links, "name":
+            context.active_object.active_material.active_texture.name, "bl_idname": node_tree.bl_idname})
 
     # create folder if more then one node_tree, or if paths are being made relative and there might be dependencies
     if len(to_export) > 1 or context.scene.node_io_dependency_save_type == "2":
@@ -447,6 +455,7 @@ def import_node_tree(self, context):
             node_tree.use_nodes = True
             nodes = node_tree.node_tree.nodes
             links = node_tree.node_tree.links
+
         elif root['__info__']['node_tree_id'] == "MitsubaShaderNodeTree":
             # make sure in correct render mode
             if root['__info__']['render_engine'] != context.scene.render.engine:
@@ -468,6 +477,12 @@ def import_node_tree(self, context):
             context.space_data.node_tree = node_tree
             nodes = node_tree.nodes
             links = node_tree.links
+
+        elif root['__info__']['node_tree_id'] == "TextureNodeTree":
+            node_tree = bpy.data.textures.new(name=root['__info__']['node_tree_name'], type='NONE')
+            node_tree.use_nodes = True
+            nodes = node_tree.node_tree.nodes
+            links = node_tree.node_tree.links
 
         # remove any default nodes
         for i in nodes:
@@ -497,11 +512,13 @@ def import_node_tree(self, context):
             if group_name not in bpy.data.node_groups or group_name == "main":  # create only if needed
                 group = root[group_name]
 
-                # set up which node tree to use
+                # set up which node tree to use (used for node groups in node tree)
                 if group_name == "main":
                     nt = nodes
                 elif root['__info__']['node_tree_id'] == "ShaderNodeTree":
                     nt = bpy.data.node_groups.new(group_name, "ShaderNodeTree")
+                elif root['__info__']['node_tree_id'] == "TextureNodeTree":
+                    nt = bpy.data.node_groups.new(group_name, "TextureNodeTree")
                 elif root['__info__']['node_tree_id'] == 'SverchCustomTreeType':
                     nt = bpy.data.node_groups.new(group_name, 'SverchGroupTreeType')
 
@@ -568,7 +585,7 @@ def import_node_tree(self, context):
                                         exec("temp.outputs[{}].{} = {}".format(i['index'], val_key,
                                                                                i['values'][val_key]))
 
-                        # deal with parent
+                        # deal with parents
                         if parent:
                             parent['node'] = temp.name
                             parent['location'] = temp.location
@@ -594,9 +611,12 @@ def import_node_tree(self, context):
                     use_ln.new(o, i)
 
         # add material to object
-        if context.object is not None and context.scene.node_io_is_auto_add and root['__info__']['node_tree_id'] in \
-                ('ShaderNodeTree', 'MitsubaShaderNodeTree'):
-            context.object.data.materials.append(node_tree)
+        if context.object is not None and context.scene.node_io_is_auto_add:
+            if root['__info__']['node_tree_id'] in ('ShaderNodeTree', 'MitsubaShaderNodeTree'):
+                context.object.data.materials.append(node_tree)
+            elif root['__info__']['node_tree_id'] == "TextureNodeTree" \
+                    and context.active_object.active_material is not None:
+                context.active_object.active_material.active_texture = node_tree
 
         self.report({"INFO"}, "NodeIO: Imported {} With {} Nodes".format(root['__info__']['node_tree_name'],
                                                                          root['__info__']['number_of_nodes']))
@@ -632,17 +652,20 @@ def set_attributes(self, temp, val, att):
         temp.material = bpy.data.materials[val]
     elif att == "mapping":
         if temp.bl_idname == "an_InterpolationFromCurveMappingNode":  # contains ShaderNodeRGBCurve, which has curve
-            node = temp.curveNode
+            node = temp.curveNode.mapping
+        elif temp.bl_idname == "TextureNodeCurveTime":
+            node = temp.curve
         else:
-            node = temp
+            node = temp.mapping
+
         # set curves
-        node.mapping.black_level = val[0]
-        node.mapping.white_level = val[1]
-        node.mapping.clip_max_x = float(val[2])
-        node.mapping.clip_max_y = float(val[3])
-        node.mapping.clip_min_x = float(val[4])
-        node.mapping.clip_min_y = float(val[5])
-        node.mapping.use_clip = True if val[6] == "True" else False
+        node.black_level = val[0]
+        node.white_level = val[1]
+        node.clip_max_x = float(val[2])
+        node.clip_max_y = float(val[3])
+        node.clip_min_x = float(val[4])
+        node.clip_min_y = float(val[5])
+        node.use_clip = True if val[6] == "True" else False
 
         for i in range(7):
             del val[0]
@@ -651,7 +674,7 @@ def set_attributes(self, temp, val, att):
         counter = 0
         for i in val:
             # set first two points
-            curves = node.mapping.curves
+            curves = node.curves
             curves[counter].extend = i[0]
             del i[0]
             curves[counter].points[0].location = i[0][0]
@@ -660,9 +683,11 @@ def set_attributes(self, temp, val, att):
             curves[counter].points[1].handle_type = i[1][1]
             del i[0:2]
             for i2 in i:
-                temp_point = node.mapping.curves[counter].points.new(i2[0][0], i2[0][1])
+                temp_point = node.curves[counter].points.new(i2[0][0], i2[0][1])
                 temp_point.handle_type = i2[1]
             counter += 1
+    elif att == "texture" and val in bpy.data.textures:
+        temp.texture = bpy.data.textures[val]
     else:
         try:
             if isinstance(val, str):
